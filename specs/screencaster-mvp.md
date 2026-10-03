@@ -79,7 +79,7 @@ testdata/scripts/            valid/invalid sample scripts for unit tests
 
 | Module | Deps |
 |---|---|
-| core | `github.com/goccy/go-yaml`, `github.com/santhosh-tekuri/jsonschema/v6`, `github.com/playwright-community/playwright-go`, `golang.org/x/sys/unix` (flock) |
+| core | `github.com/goccy/go-yaml`, `github.com/santhosh-tekuri/jsonschema/v6`, `github.com/mxschmitt/playwright-go` (v0.6201.1; the project moved from playwright-community at v0.6100.0), `golang.org/x/sys/unix` (flock) |
 | cli | `screencaster/core`, `github.com/spf13/cobra` |
 | mcp | `screencaster/core`, `github.com/modelcontextprotocol/go-sdk`, `modernc.org/sqlite`, `github.com/google/uuid` |
 | e2e | `screencaster/core` (tts for lead-silence calibration, explorer) |
@@ -209,7 +209,7 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
 **depguard rules (`.golangci.yml`):**
 - `core/**`: deny `modernc.org/sqlite`, `github.com/modelcontextprotocol/go-sdk`, `screencaster/cli`, `screencaster/mcp`.
 - `core/**` except `core/{tts,assembler,browser}`: deny `os/exec`.
-- `core/**` except `core/browser`: deny `github.com/playwright-community/playwright-go`.
+- `core/**` except `core/browser`: deny `github.com/mxschmitt/playwright-go`.
 - `cli/**`: deny `screencaster/mcp`, the MCP SDK and SQLite.
 - `mcp/queue/**`: deny the MCP SDK.
 
@@ -302,6 +302,14 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
   - **ARIA snapshot + derived unique selectors (ADR-47).**
   - **Fallback if spike S4 fails:** DOM walk via `page.Evaluate`, computing role and name from the accessibility properties.
 
+## Checkpoints (Todo List)
+
+- [x] **M1** (steps 1–13): FR-001/FR-002 tests green, `make test|vet|lint` clean (CI pending: no remote configured yet)
+- [x] **M2** (steps 14–21): fixture recording works; S1/S2 in ARCHITECTURE §17; `make e2e` green — 54 s, 5 e2e tests pass; S1 drift now 2 ms with compensation
+- [ ] **M3** (steps 22–30): `screencaster render` EN and EN+PL pass ffprobe, drift ≤ 100 ms, NFR-001; S3 recorded
+- [ ] **M4** (steps 31–35): runtime image builds, `make image-check` and runtime e2e pass
+- [ ] **M5** (steps 36–43): MCP tools/queue tests green, S4 recorded, manual Claude Code run done
+
 ## Implementation Steps
 
 ### M1 — Skeleton, config, schema (FR-001, FR-002; CI)
@@ -385,6 +393,16 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
     - Missing selector at step 4 → `Failure{Step:4, Lang:"en"}` within 31 s, and the temp dir is gone.
 
 **DoD:** PRD M2 DoD; spikes S1/S2 recorded in ARCHITECTURE §17.
+
+**Status (2026-10-03):** steps 14–21 implemented. Deviations from the plan:
+- **playwright-go path:** `github.com/mxschmitt/playwright-go` v0.6201.1. The project moved from `playwright-community` at v0.6100.0 and the old path stops at v0.6000.0. The depguard rule and the dependency table use the new path.
+- **`browser.Session` has `Start()` and `Abort()`.** `Launch` opens browser and context but no page, so the recorder takes `t0` right before `Start()` (ADR-46). `Abort()` stops the driver instead of closing the context: closing a recording context encodes the video first and took ~14 s after a 35 s recording, which broke the 31 s limit of FR-008. Abort took 85 ms and left no Chromium process. The recorder aborts on any failure or cancel and closes only on success.
+- **`executor.New` returns `(*Executor, error)`** (it parses `baseUrl`).
+- **`Recorder` is a struct** with injected `Launch`, `Now`, `Sleep`; `recorder.New` wires the real clock. `Clips` and `Offsets` are indexed by 0-based step index; failures use 1-based step numbers.
+- **Dev image:** also gets ffmpeg now (S1 reads frames), `GOPATH=/cache/go` (the sumdb cache needs a writable GOPATH for `--user`), and `HOME=/tmp`. `make e2e` and `go vet -tags e2e` moved up from M3 step 30; golangci-lint runs with `build-tags: [e2e]`.
+- **Temp-dir removal after an abort** is owned by `renderer.Render` (`defer os.RemoveAll`), so it is asserted in M3 (`TestRender_cancelRemovesTempDir`), not in the M2 e2e test.
+- **S1 result:** video time 0 is ~90 ms after `t0` (52–129 ms over 10 runs, ±40 ms per sample). Compensation added: `recorder.LeadInCompensation = 90ms` is subtracted from every offset, clamped at 0 (user decision, option a).
+- **S2 result:** playwright-go locators are strict. An ambiguous selector fails in ~10 ms with `strict mode violation: locator('a') resolved to 2 elements`, for click, hover, fill and moveTo. The executor needs no `Count()` pre-check.
 
 ### M3 — TTS, sync, assembly, CLI (FR-003, FR-007, FR-009, FR-010, FR-011)
 
