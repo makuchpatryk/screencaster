@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Projects</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <h1>Projects</h1>
+  <button type="button" id="open-form">New project</button>
+  <form id="project-form" hidden>
+    <label>Name <input name="name"></label>
+    <label>Visibility
+      <select name="visibility">
+        <option value="public">Public</option>
+        <option value="private">Private</option>
+      </select>
+    </label>
+    <button type="submit">Create</button>
+  </form>
+  <p id="toast" hidden></p>
+  <div style="height: 2000px"></div>
+  <footer id="footer">Footer</footer>
+  <script src="app.js"></script>
+</body>
+</html>

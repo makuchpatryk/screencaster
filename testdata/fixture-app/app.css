@@ -1,0 +1,6 @@
+body { font-family: sans-serif; margin: 2rem; }
+body.dark { background: #000; color: #888; }
+#flash { position: fixed; inset: 0; background: #fff; }
+#flash[hidden] { display: none; }
+form[hidden], #toast[hidden], #logged-in[hidden] { display: none; }
+form label { display: block; margin: .5rem 0; }

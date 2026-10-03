@@ -160,4 +160,4 @@ Everything not in this table is a review point.
 
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
-- Open spikes (ARCHITECTURE §17): recording lead-in, strict-locator behaviour, Piper WAV format, `AriaSnapshot` output. Update code and decision log as each resolves.
+- Open spikes (ARCHITECTURE §17): Piper WAV format, `AriaSnapshot` output. Update code and decision log as each resolves.

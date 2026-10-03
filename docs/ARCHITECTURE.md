@@ -134,14 +134,14 @@ t0 ─────────────────────────�
  │   └─ next starts at max(action end, start+clip)  └─ next starts at action end
 ```
 
-- **t0** is a monotonic timestamp taken immediately before the recorded page is created (ADR-46). Every step start offset is `now − t0` in ms.
+- **t0** is a monotonic timestamp taken immediately before the recorded page is created (ADR-46). Every step start offset is `now − t0 − LeadInCompensation` in ms (90 ms, clamped at 0), see the known risk below.
 - For each step: record `offset`, start the action, then wait until `max(actionEnd, offset + clipDuration)` if narrated, else continue at `actionEnd` (BR-003, FR-007).
 - Narration is **not** played during recording. Assembler places each clip at `adelay=<offset>ms` and mixes (FR-009.1). So audio sync does not depend on real-time playback.
 - Playwright's WebM is variable frame rate. The transcode forces constant 30 fps (`-r 30` / `fps=30` filter) so video time equals wall time and offsets stay valid.
 - Output duration is the video length (FR-009.4). The last narrated step waits for its clip, so the video always covers the audio.
 - Accepted drift: ±100 ms (FR-007 AC). The e2e test measures actual drift by checking an audible/visible marker step against its offset.
 
-**Known risk:** Playwright starts recording at page creation, and the first frames can precede `t0` by a small amount. The M2 spike must measure this lead-in. If it exceeds ~100 ms, add a fixed compensation constant (not a trim step).
+**Lead-in (spike S1, ADR-46):** Playwright's video time 0 is about 90 ms after page creation, so a clip placed at the raw offset would play that much late. The recorder subtracts the fixed constant `recorder.LeadInCompensation` (90 ms) from every offset. No trimming.
 
 ## 6. Concurrency model
 
@@ -312,7 +312,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PR
 |---|----------|--------------|-----------|
 | 44 | `explore_page` may overlap a running render; no shared browser lock | Shared semaphore; reject during render | User choice. Offsets come from timestamps, so correctness holds. Revisit if timing jitter shows up. |
 | 45 | `flock` lock file `.screencaster/render.lock` guards CLI vs MCP worker. CLI fails fast, worker waits | No lock; CLI enqueues via SQLite | User choice. Kernel releases on crash. Keeps PRD rule that CLI has no queue or job record. |
-| 46 | Recording `t0` = monotonic timestamp just before recorded page creation; no trimming; fixed compensation only if the M2 spike measures lead-in > ~100 ms | Trim lead-in with `ffmpeg -ss` | User choice. Fewer moving parts. |
+| 46 | Recording `t0` = monotonic timestamp just before recorded page creation; no trimming; fixed compensation (90 ms, measured in the M2 spike, see §17) | Trim lead-in with `ffmpeg -ss` | User choice. Fewer moving parts. |
 | 47 | `explore_page` snapshot = ARIA snapshot plus derived, uniqueness-checked selectors | Deprecated `page.Accessibility.Snapshot`; raw DOM dump | Supported API. Guarantees the "selector works in render" AC. Needs M5 spike to confirm output format in playwright-go. |
 | 48 | Logs to stderr only, subprocess output captured | — | Required by MCP stdio. |
 | 49 | Clip duration read from the WAV header, not ffprobe | Spawn ffprobe per clip | No subprocess per clip, exact for PCM WAV. Piper emits PCM WAV. |
@@ -325,8 +325,8 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PR
 
 ## 17. Open items for spikes
 
-1. **M2:** measure the gap between page creation and first recorded frame (ADR-46).
-2. **M2:** confirm strict-locator behavior of playwright-go for `click`/`hover`/`fill` and that ambiguous selectors fail with a usable message.
+1. **M2:** measure the gap between page creation and first recorded frame (ADR-46). **Done: compensation added.** Method: `t0` just before `NewPage`, `goto marker.html`, wait 1 s, click `#marker` (full-viewport white flash), then find the first dark→bright frame in the raw WebM with ffmpeg `signalstats`. Over 10 runs (dev image, playwright-go v0.6201.1) the flash frame sits **52–129 ms before** the click's offset from `t0`, mean ≈ 90 ms; 2 of 10 runs exceed 100 ms. The WebM has a 40 ms frame step, so each sample is ±40 ms. The sign is consistent: video time 0 is ~90 ms after `t0`, so clips placed at raw offsets play ~90 ms late. The mean sits just under the ADR-46 gate but the spread does not, so `recorder.LeadInCompensation = 90ms` is subtracted from every offset (clamped at 0). With it the residual is about ±40 ms. `TestRecord_leadInIsWithinTolerance` guards it; the M3 drift e2e measures audio vs flash end to end.
+2. **M2:** confirm strict-locator behavior of playwright-go for `click`/`hover`/`fill` and that ambiguous selectors fail with a usable message. **Done: passes.** Locators are strict by default. A selector matching 2 elements fails in ~10 ms for click, hover, fill and the cursor glide, with `strict mode violation: locator('a') resolved to 2 elements:` plus the candidates. The executor uses this directly, with no `Count()` pre-check. Guarded by `TestBrowser_ambiguousSelectorFailsFast` (e2e).
 3. **M3:** confirm Piper CLI flags and WAV format (sample rate, PCM) for ADR-49.
 4. **M5:** confirm `Locator.AriaSnapshot` output in playwright-go and build the role→selector mapper (ADR-47).
 

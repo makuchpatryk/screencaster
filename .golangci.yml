@@ -1,5 +1,8 @@
 version: "2"
 
+run:
+  build-tags: [e2e] # lint the e2e test files too
+
 # Import boundaries from ARCHITECTURE §3 and CODE_QUALITY "Separation of
 # concerns". Patterns match the file path, so each rule works in every module.
 linters:
@@ -29,7 +32,7 @@ linters:
         core-playwright-only-in-browser:
           files: ["**/core/**", "!**/core/browser/**"]
           deny:
-            - pkg: github.com/playwright-community/playwright-go
+            - pkg: github.com/mxschmitt/playwright-go
               desc: only core/browser talks to playwright-go
         cli-no-mcp:
           files: ["**/cli/**"]
