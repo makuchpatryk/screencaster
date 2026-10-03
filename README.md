@@ -4,17 +4,16 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
 
 ## Quick start
 
-1. **Clone and build** (Go 1.22+):
+1. **Clone and build** (Go 1.25; `go.work` is committed):
    ```bash
-   go work use ./core ./cli ./mcp
    go build -o screencaster ./cli
    go build -o screencaster-mcp ./mcp
    ```
 
-2. **Docker** (recommended for rendering):
+2. **Docker** (recommended for rendering; the runtime image arrives with M4):
    ```bash
    docker build -t screencaster .
-   docker run -i --rm --add-host=host.docker.internal:host-gateway \
+   docker run -i --rm --init --add-host=host.docker.internal:host-gateway \
      -v $(pwd):/work screencaster screencaster-mcp
    ```
 
@@ -58,29 +57,27 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
 ## Project layout
 
 ```
-core/          shared library (no MCP, no SQLite)
+core/          shared library (no MCP, no SQLite); script.schema.json lives in core/script
 cli/           screencaster render ... CLI
 mcp/           screencaster-mcp MCP server
-schema/        script.schema.json
-testdata/      fixture HTML app for e2e
+tests/e2e/     end-to-end tests (own module, local only)
+testdata/      fixture HTML app and sample scripts
 Dockerfile
+Makefile
 ```
 
 ## Development
 
+The host needs only Docker. Go, golangci-lint and (from M2) Chromium, Piper and ffmpeg live in the dev image; the source is mounted, not copied.
+
 ```bash
-# Test all modules
-go test -race ./...
-
-# Lint
-golangci-lint run ./...
-
-# Build image
-docker build -t screencaster .
-
-# E2E in the image
-docker run --rm -v $(pwd):/work screencaster go test -race ./...
+make dev-image   # build the dev image once, rebuild when the Dockerfile changes
+make test        # go test -race in core, cli, mcp, tests/e2e
+make vet         # go vet in every module
+make lint        # golangci-lint (incl. import-boundary rules) in every module
 ```
+
+`make e2e` and `make image` arrive with M3 and M4. E2E runs locally only, not in CI.
 
 ## Scripts
 
@@ -99,13 +96,13 @@ docker run --rm -v $(pwd):/work screencaster go test -race ./...
 ## Notes
 
 - Add extra Piper voices to `/work/voices/*.onnx` (FR-018)
-- Add `.screencaster/` to `.gitignore`
+- Add `.screencaster/` to the `.gitignore` of the project you render (render lock, job DB, temp files)
 - The MCP server runs inside Docker. Configure in Claude Code with:
   ```json
   {
     "name": "screencaster",
     "command": "docker",
-    "args": ["run", "-i", "--rm", "--add-host=host.docker.internal:host-gateway", "-v", "<project>:/work", "screencaster", "screencaster-mcp"]
+    "args": ["run", "-i", "--rm", "--init", "--add-host=host.docker.internal:host-gateway", "-v", "<project>:/work", "screencaster", "screencaster-mcp"]
   }
   ```
 

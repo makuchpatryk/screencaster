@@ -20,7 +20,8 @@ Prefer the boring solution. Add a dependency or abstraction only when the plain 
 
 - Standard library and OS first: `flock` for the render lock, `os.Rename` to publish, `go:embed` for the schema, `encoding/binary` for the WAV header, `os/exec` for Piper and ffmpeg.
 - Short, single-purpose functions with early returns. Handle the error, then continue on the happy path.
-- Plain structs and slices. No ORM, DI container, plugin system, job framework or CLI framework. `database/sql` with a few queries is enough (ARCHITECTURE §10).
+- Plain structs and slices. No ORM, DI container, plugin system or job framework. `database/sql` with a few queries is enough (ARCHITECTURE §10).
+- **Deviation:** `cobra` for the CLI (Decision 53, user choice). It is the only framework allowed; std `flag` would have been enough for one command.
 - One long-lived goroutine in the MCP server: the queue worker (ARCHITECTURE §6.2). Everything else is a plain call.
 
 ## YAGNI
@@ -41,7 +42,7 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 
 | Knowledge | Lives in |
 |---|---|
-| Script format (fields, enums, limits) | `schema/script.schema.json`, embedded in `core/script`. Same text feeds validation and the `render_video` tool description |
+| Script format (fields, enums, limits) | `core/script/script.schema.json`, embedded in `core/script`. Same text feeds validation and the `render_video` tool description |
 | Cross-field script rules (narration per selected language, scroll/wait exclusivity) | `core/script`, one validate function |
 | Language selection, override > script > `["en"]` (BR-002) | one function, called by CLI, MCP validation and worker |
 | Voice resolution and built-in `en`/`pl` defaults (BR-011) | `core/voices` |
@@ -132,14 +133,14 @@ Go has no inheritance. The rule is about not rebuilding it.
 
 ## Enforcement
 
-CI is as specified in PRD §18.
+CI is as specified in PRD §18. `make lint`, `make vet` and `make test` run the same checks locally in the dev image.
 
 | Check | Guards |
 |---|---|
 | `golangci-lint` (with a `depguard` rule for the import boundaries above) | unused code, error handling, boundary rules |
 | `go test ./...` for each workspace module | `core` rules (resolution, validation, timing math), queue order and recovery, schema accepts the example script and rejects invalid samples |
-| E2E render in the Docker image | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render |
-| `docker build` | image contents, built-in voices present |
+| `make e2e` in the dev image (local, not in CI, Decision 54) | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render |
+| `docker build` (CI job from M4) | image contents, built-in voices present |
 
 Everything not in this table is a review point.
 
@@ -157,6 +158,6 @@ Everything not in this table is a review point.
 
 ## Known debt
 
-- No code yet, so no duplication debt. Add entries as they appear.
+- golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
 - Open spikes (ARCHITECTURE §17): recording lead-in, strict-locator behaviour, Piper WAV format, `AriaSnapshot` output. Update code and decision log as each resolves.

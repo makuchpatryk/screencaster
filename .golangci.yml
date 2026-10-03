@@ -1,0 +1,47 @@
+version: "2"
+
+# Import boundaries from ARCHITECTURE §3 and CODE_QUALITY "Separation of
+# concerns". Patterns match the file path, so each rule works in every module.
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - depguard
+    - errorlint
+  settings:
+    depguard:
+      rules:
+        core-no-adapters:
+          files: ["**/core/**"]
+          deny:
+            - pkg: modernc.org/sqlite
+              desc: core must not import SQLite (queue lives in mcp/queue)
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: core must not import the MCP SDK
+            - pkg: screencaster/cli
+              desc: core must not import its entry points
+            - pkg: screencaster/mcp
+              desc: core must not import its entry points
+        core-exec-only-in-wrappers:
+          files: ["**/core/**", "!**/core/tts/**", "!**/core/assembler/**", "!**/core/browser/**"]
+          deny:
+            - pkg: os/exec
+              desc: only core/tts, core/assembler and core/browser spawn processes
+        core-playwright-only-in-browser:
+          files: ["**/core/**", "!**/core/browser/**"]
+          deny:
+            - pkg: github.com/playwright-community/playwright-go
+              desc: only core/browser talks to playwright-go
+        cli-no-mcp:
+          files: ["**/cli/**"]
+          deny:
+            - pkg: screencaster/mcp
+              desc: cli must not import mcp
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: cli must not import the MCP SDK
+            - pkg: modernc.org/sqlite
+              desc: cli must not import SQLite
+        queue-no-mcp-sdk:
+          files: ["**/mcp/queue/**"]
+          deny:
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: mcp/queue must not import MCP SDK types

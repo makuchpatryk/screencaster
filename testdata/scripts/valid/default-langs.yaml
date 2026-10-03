@@ -1,0 +1,9 @@
+# No `languages` field: renders ["en"], so narration.en alone is enough (FR-002 AC2).
+name: default-langs
+steps:
+  - action: goto
+    url: /projects
+    narration:
+      en: Welcome to the projects page.
+  - action: click
+    selector: role=button[name="New project"]

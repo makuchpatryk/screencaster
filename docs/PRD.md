@@ -217,7 +217,7 @@ None identified by user.
 
 ### FR-002: Script schema & validation
 - **Implements:** BR-001, BR-002, BR-010
-- **Description:** The system must parse the YAML script and validate it against a JSON Schema file (`schema/script.schema.json`, compiled into both binaries via `go:embed` in `core/script`) using `santhosh-tekuri/jsonschema`, before any browser or TTS work.
+- **Description:** The system must parse the YAML script and validate it against a JSON Schema file (`core/script/script.schema.json`, embedded with `go:embed` in `core/script` and so compiled into both binaries) using `santhosh-tekuri/jsonschema`, before any browser or TTS work.
 - **Inputs / validation:**
   - `name` (string, required, `^[a-z0-9-]{1,64}$`; used in output filenames)
   - `languages` (array, optional, lowercase ISO 639-1 codes such as `en`, `pl`, `de`; default `["en"]`; overridable per render, BR-002)
@@ -484,15 +484,16 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | TTS | Piper | voices en_US-ryan-high, pl_PL-darkman-medium |
 | Media | ffmpeg, ffprobe | — |
 | Hosting / Deployment | Docker image, run locally | — |
-| CI/CD | GitHub Actions: golangci-lint, go test, docker build | — |
-| Testing | `go test` unit tests + 1 e2e render against a fixture HTML app | — |
+| CI/CD | GitHub Actions: golangci-lint, go vet, go test, docker build (from M4) | — |
+| Testing | `go test` unit tests + 1 e2e render against a fixture HTML app (local, `make e2e`; not in CI) | — |
 
-- **Repo structure:** Go workspace (`go.work`) with three modules:
-  - `core/` (config, schema, TTS, recorder, assembler, renderer, explorer)
+- **Repo structure:** Go workspace (`go.work`, committed) with four modules:
+  - `core/` (config, script + `script.schema.json`, voices, TTS, recorder, assembler, renderer, explorer)
   - `cli/` (`screencaster`)
   - `mcp/` (`screencaster-mcp`, queue, SQLite)
+  - `tests/e2e/` (end-to-end tests, run locally with `make e2e`)
 
-  Also at the repo root: `schema/script.schema.json` (embedded in core), `testdata/fixture-app/`, `Dockerfile`.
+  Also at the repo root: `testdata/` (fixture app, sample scripts), `Dockerfile`, `Makefile`, `.golangci.yml`.
 
 ## 19. Implementation Plan
 
@@ -576,6 +577,11 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 48 | MCP server: logs to stderr only, subprocess stdout/stderr captured, never inherited | Logs to stdout | Required for MCP stdio hygiene. See ARCHITECTURE.md §12. |
 | 49 | Narration clip duration read from WAV header, not ffprobe | Spawn ffprobe per clip | Avoids subprocess per clip. Piper emits PCM WAV, duration exact from header. See ARCHITECTURE.md §4. |
 | 50 | Constant 30 fps forced during transcode with `fps=30` filter / `-r 30` | Pass VFR through | Keeps video time equal to wall time for adelay offsets. See ARCHITECTURE.md §5. |
+| 51 | Commit `go.work` and `go.work.sum` | Ignore and generate in CI/Docker | One source of truth for CI, the image and contributors. |
+| 52 | Dev Docker image from M1; every `make` target runs in it | Host Go install | The host has only Docker; one toolchain everywhere. |
+| 53 | `spf13/cobra` for the CLI | std `flag` | User choice; documented deviation from the KISS rule in CODE_QUALITY.md. |
+| 54 | e2e tests in their own module `tests/e2e`, run locally with `make e2e`, not in CI | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. Deviates from ARCHITECTURE.md §13. |
+| 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
 
 ## 21. Open Questions
 None.

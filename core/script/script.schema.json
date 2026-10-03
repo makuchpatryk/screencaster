@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "screencaster demo script",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "steps"],
+  "properties": {
+    "name": {
+      "description": "Used in output filenames: <name>.<lang>.<timestamp>.mp4",
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,64}$"
+    },
+    "languages": {
+      "description": "Languages to render, in order. Default [\"en\"]. A render-time override wins. Every narrated step needs narration text for each selected language.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/lang" }
+    },
+    "voices": {
+      "description": "Piper voice name per language code. Falls back to screencaster.yaml, then the built-in en/pl voices.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/lang" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "meta": {
+      "description": "Written to the MP4 title and comment tags.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "audience": { "enum": ["release-notes", "sales", "marketing"] }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "lang": {
+      "description": "Lowercase ISO 639-1 language code",
+      "type": "string",
+      "pattern": "^[a-z]{2}$"
+    },
+    "selector": {
+      "description": "Playwright selector string: CSS, role=..., text=...",
+      "type": "string",
+      "minLength": 1
+    },
+    "step": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": { "enum": ["goto", "click", "fill", "select", "press", "hover", "scroll", "wait"] },
+        "narration": {
+          "description": "Spoken text per language code. Must contain every selected language. Text for unselected languages is ignored.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/lang" },
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["action"], "properties": { "action": { "const": "goto" } } },
+          "then": {
+            "required": ["url"],
+            "properties": {
+              "url": {
+                "description": "Path relative to baseUrl, or an absolute http(s) URL used as-is",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": { "required": ["action"], "properties": { "action": { "enum": ["click", "hover"] } } },
+          "then": {
+            "required": ["selector"],
+            "properties": { "selector": { "$ref": "#/$defs/selector" } }
+          }
+        },
+        {
+          "if": { "required": ["action"], "properties": { "action": { "enum": ["fill", "select"] } } },
+          "then": {
+            "required": ["selector", "value"],
+            "properties": {
+              "selector": { "$ref": "#/$defs/selector" },
+              "value": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "required": ["action"], "properties": { "action": { "const": "press" } } },
+          "then": {
+            "required": ["key"],
+            "properties": {
+              "key": { "description": "Playwright key name, e.g. Enter", "type": "string", "minLength": 1 },
+              "selector": { "$ref": "#/$defs/selector" }
+            }
+          }
+        },
+        {
+          "if": { "required": ["action"], "properties": { "action": { "const": "scroll" } } },
+          "then": {
+            "description": "Exactly one of selector (scroll into view) or y (window scroll to px)",
+            "oneOf": [{ "required": ["selector"] }, { "required": ["y"] }],
+            "properties": {
+              "selector": { "$ref": "#/$defs/selector" },
+              "y": { "type": "integer" }
+            }
+          }
+        },
+        {
+          "if": { "required": ["action"], "properties": { "action": { "const": "wait" } } },
+          "then": {
+            "description": "Exactly one of ms (sleep) or selector (wait until visible)",
+            "oneOf": [{ "required": ["ms"] }, { "required": ["selector"] }],
+            "properties": {
+              "ms": { "type": "integer", "minimum": 1, "maximum": 30000 },
+              "selector": { "$ref": "#/$defs/selector" }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

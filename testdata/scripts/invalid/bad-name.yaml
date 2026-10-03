@@ -1,0 +1,4 @@
+name: My Demo
+steps:
+  - action: goto
+    url: /

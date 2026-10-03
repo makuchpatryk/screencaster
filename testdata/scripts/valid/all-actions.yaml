@@ -1,0 +1,30 @@
+name: all-actions
+steps:
+  - action: goto
+    url: /projects
+  - action: click
+    selector: role=button[name="New project"]
+  - action: fill
+    selector: input[name="name"]
+    value: My Project
+  - action: fill
+    selector: input[name="notes"]
+    value: ""
+  - action: select
+    selector: select[name="visibility"]
+    value: private
+  - action: press
+    key: Enter
+  - action: press
+    key: Tab
+    selector: input[name="name"]
+  - action: hover
+    selector: text=Create
+  - action: scroll
+    selector: "#footer"
+  - action: scroll
+    y: 0
+  - action: wait
+    ms: 30000
+  - action: wait
+    selector: "#toast"

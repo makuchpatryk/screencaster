@@ -1,0 +1,5 @@
+name: demo
+steps:
+  - action: click
+    selector: "#a"
+    url: /not-allowed-on-click

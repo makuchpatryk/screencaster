@@ -1,0 +1,20 @@
+name: en-pl
+languages: [en, pl]
+voices:
+  pl: pl_PL-gosia-medium
+meta:
+  title: Create a project
+  description: Shows how to create a project.
+  audience: sales
+steps:
+  - action: goto
+    url: http://127.0.0.1:3000/projects
+    narration:
+      en: This is the projects page.
+      pl: To jest strona projektów.
+  - action: click
+    selector: "#new-project"
+    narration:
+      en: Click New project.
+      pl: Kliknij Nowy projekt.
+      de: Text for an unselected language is ignored.

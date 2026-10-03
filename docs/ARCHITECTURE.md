@@ -48,7 +48,7 @@ Two entry points (`screencaster`, `screencaster-mcp`) are thin shells over one l
 
 ## 3. Module view
 
-Go workspace (`go.work`), three modules (Decision 29).
+Go workspace (`go.work`, committed, Decision 51), four modules (Decisions 29, 54).
 
 ```
 core/                      library, no MCP, no SQLite
@@ -64,14 +64,20 @@ core/                      library, no MCP, no SQLite
   explorer/                explore_page logic                          FR-017
   lock/                    flock-based render lock                     see 6.3
   failure/                 error types                                 see 9
-cli/                       screencaster render ...                     FR-011
+cli/                       screencaster render ...  (cobra)            FR-011
 mcp/
   server/                  tool + prompt registration (go-sdk)         FR-012, 013, 017, 018, 019
   queue/                   SQLite store + single worker                FR-014, FR-015
-schema/script.schema.json  go:embed'd into core/script
-testdata/fixture-app/      static HTML app for e2e
-Dockerfile
+tests/e2e/                 own module, //go:build e2e, `make e2e`      NFR-001, NFR-002
+testdata/
+  fixture-app/             static HTML app for e2e
+  scripts/valid|invalid/   sample scripts for the core/script tests
+Dockerfile                 stages: dev -> build -> runtime
+Makefile                   dev-image, test, vet, lint (all run in the dev image)
+.golangci.yml              depguard rules for the dependency rules below
 ```
+
+The JSON Schema lives next to the code that embeds it: `core/script/script.schema.json` (`go:embed` cannot reference a parent directory, Decision 55). `core/script/example.yaml` is the example shown in the `render_video` tool description.
 
 **Dependency rules**
 
@@ -280,9 +286,9 @@ stateDiagram-v2
 |-------|-------|-------|
 | Unit | config, schema, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Browser`, `Synthesizer`, `Assembler` |
 | Integration | SQLite store, lock file semantics, MCP tool/prompt wiring via in-memory transport | `go test` |
-| E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | runs inside the Docker image in CI |
+| E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | `make e2e` in the dev image, locally (Decision 54) |
 
-CI (GitHub Actions): `golangci-lint`, `go test ./...`, `docker build`, e2e in the built image.
+CI (GitHub Actions): `golangci-lint`, `go vet`, `go test -race` per module; a `docker build` job from M4. E2E does not run in CI (Decision 54).
 
 ## 14. Security notes
 
@@ -300,7 +306,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). Back-port 44–47 to the PRD if you want one list.
+Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PRD log.
 
 | # | Decision | Alternatives | Rationale |
 |---|----------|--------------|-----------|
@@ -311,6 +317,11 @@ Numbering continues the PRD Decisions Log (last: 43). Back-port 44–47 to the P
 | 48 | Logs to stderr only, subprocess output captured | — | Required by MCP stdio. |
 | 49 | Clip duration read from the WAV header, not ffprobe | Spawn ffprobe per clip | No subprocess per clip, exact for PCM WAV. Piper emits PCM WAV. |
 | 50 | Constant 30 fps forced during transcode | Pass VFR through | Keeps video time equal to wall time for `adelay` offsets. |
+| 51 | Commit `go.work` and `go.work.sum` | Ignore and generate in CI/Docker | One source of truth for CI, the image and contributors. |
+| 52 | Dev Docker image from M1; every `make` target runs in it | Host Go install | The host has only Docker; one toolchain everywhere. golangci-lint is pinned to v2.12.0, the newest release that builds on Go 1.25. |
+| 53 | `cobra` for the CLI | std `flag` | User choice; documented deviation from KISS (CODE_QUALITY). |
+| 54 | e2e in module `tests/e2e`, local only (`make e2e`) | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. The pipeline is not verified in CI. |
+| 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
 
 ## 17. Open items for spikes
 
@@ -319,10 +330,6 @@ Numbering continues the PRD Decisions Log (last: 43). Back-port 44–47 to the P
 3. **M3:** confirm Piper CLI flags and WAV format (sample rate, PCM) for ADR-49.
 4. **M5:** confirm `Locator.AriaSnapshot` output in playwright-go and build the role→selector mapper (ADR-47).
 
-## 18. PRD inconsistencies found while writing this
+## 18. PRD inconsistencies
 
-Not changed here. Fix in the PRD when convenient.
-
-- Glossary says a Job produces "EN and PL MP4s" and a Step has "EN/PL narration". BR-002 makes languages generic and default EN only.
-- FR-002 says the schema is "embedded in the binary". Precisely: `go:embed` in `core/script`, compiled into both binaries.
-- FR-014 says "single worker goroutine takes the oldest queued job" but does not mention the render lock. The lock (6.3) now makes a job wait while a CLI render runs.
+None open. The glossary, FR-002 (embed wording, schema path), FR-014 (render lock) and §18 repo structure were aligned with this document in M1.

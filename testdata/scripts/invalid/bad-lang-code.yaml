@@ -1,0 +1,5 @@
+name: demo
+languages: [english]
+steps:
+  - action: goto
+    url: /

@@ -1,0 +1,6 @@
+name: demo
+steps:
+  - action: goto
+    url: /
+  - action: wait
+    ms: 0
