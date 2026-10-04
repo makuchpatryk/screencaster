@@ -174,7 +174,7 @@ CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
 -- position: SELECT COUNT(*)+1 FROM jobs WHERE status='queued' AND (created_at, rowid) < (?, ?)
 ```
 
-`created_at` uses `RFC3339Nano`, and `rowid` breaks ties, so back-to-back submissions within the same second still keep FIFO order. The PRD's "RFC 3339" is satisfied. `mcp/queue` holds statuses as typed constants. The worker passes the stored `languages` as `LangOverride`, so a render uses the selection made at submit time.
+`created_at` uses a fixed-width UTC layout with 9 fraction digits (`RFC3339Nano` trims zeros and breaks text ordering, ADR-57), and `rowid` breaks ties, so back-to-back submissions within the same second still keep FIFO order. The PRD's "RFC 3339" is satisfied. `mcp/queue` holds statuses as typed constants. The worker passes the stored `languages` as `LangOverride`, so a render uses the selection made at submit time.
 
 **ffmpeg command (assembler, sketch; confirmed in M3):**
 
@@ -494,6 +494,7 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
     - Uniqueness via a `Count` call; append `>> nth=<i>` on collision.
     - Cap at 50 000 chars with `truncated`.
     - Package-level `sync.Mutex` serializes calls (FR-017).
+   - Done: initial navigation is step 0, actions are steps 1..n; actions are checked by `script.ValidateSteps`.
     - Unit test: the mapper on canned snapshots (via a `Page`-like fake).
     - E2e: the selector from explore works in a render (FR-017 AC3), in `tests/e2e/explore_test.go`.
 38. **`mcp/queue`:**
@@ -505,7 +506,7 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
       - `TestRecover_marksInterrupted` (pre-seeded DB).
       - `TestWorker_jobStaysQueuedWhileLockHeld` (FR-014 AC2).
       - `TestWorker_oneAtATime`.
-39. **`mcp/server`:**
+39. **`mcp/server`:** (done; tool errors are returned errors, so the SDK sets `isError` without empty structured output)
     - go-sdk server with 4 tools + the `create_demo` prompt.
     - `render_video`: `renderer.Prepare` synchronously, ValidationErrors → tool error, else insert.
     - `get_options`: `voices.Discover` + config + valid `demos/*.yaml`.
@@ -546,7 +547,7 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
   - Mitigation: `exec.CommandContext`; `defer browser.Close` + `os.RemoveAll`; `--init` in docs; recovery removes `tmp/*`.
   - Test: `TestRender_cancelRemovesTempDir`.
 - **FIFO ties for jobs created in the same second.**
-  - Mitigation: `RFC3339Nano` + `rowid` tie-break; covered by a test.
+  - Mitigation: Fixed-width nanosecond timestamp + `rowid` tie-break (ADR-57); covered by `TestQueue_fifoOrder`.
 - **Archived Piper binary or HF voice URLs disappear.**
   - Mitigation: pin by sha256.
   - Fallback: vendor the tarball/voices into a release asset (later).
@@ -578,9 +579,9 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
 ## Success Checklist
 
 - [ ] All success criteria met (with evidence)
-- [ ] `golangci-lint`, `go vet`, `go test -race` clean in core, cli, mcp, tests/e2e
+- [x] `golangci-lint`, `go vet`, `go test -race` clean in core, cli, mcp, tests/e2e
 - [ ] `make e2e` green in the dev image and against the runtime image
-- [ ] Spikes S1–S4 recorded in ARCHITECTURE §17
+- [x] Spikes S1–S4 recorded in ARCHITECTURE §17
 - [ ] Code review approved (screencaster-review)
 - [ ] Docs updated: PRD fixes + decisions 51–55, ARCHITECTURE §3/§10/§13/§16/§17/§18, CODE_QUALITY KISS/DRY/Enforcement/Known debt, README, .gitignore
 - [ ] No regressions in existing demo scripts (none exist yet; `testdata/scripts` serve as the baseline)
