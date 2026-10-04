@@ -8,9 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"screencaster/core/failure"
+	"screencaster/core/script"
 )
 
 const modelExt = ".onnx"
@@ -90,4 +92,47 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// Option describes one language for get_options (FR-018). DefaultVoice is empty
+// when no usable default exists.
+type Option struct {
+	Code              string
+	SelectedByDefault bool
+	DefaultVoice      string
+	Voices            []string // installed voice names, sorted
+}
+
+// Options lists en, pl and every other language with an installed voice,
+// sorted by code. The default voice follows BR-011 (config, then built-in)
+// and counts only when it is installed, because Resolve would reject it
+// otherwise.
+func Options(inst Installed, cfgVoices map[string]string) []Option {
+	byLang := map[string][]string{}
+	for lang := range builtin {
+		byLang[lang] = nil
+	}
+	for name := range inst {
+		if lang := Lang(name); lang != "" {
+			byLang[lang] = append(byLang[lang], name)
+		}
+	}
+
+	defaults := script.Languages(nil, nil)
+	opts := make([]Option, 0, len(byLang))
+	for lang, names := range byLang {
+		slices.Sort(names)
+		def := firstNonEmpty(cfgVoices[lang], builtin[lang])
+		if _, ok := inst[def]; !ok {
+			def = ""
+		}
+		opts = append(opts, Option{
+			Code:              lang,
+			SelectedByDefault: slices.Contains(defaults, lang),
+			DefaultVoice:      def,
+			Voices:            append([]string{}, names...),
+		})
+	}
+	slices.SortFunc(opts, func(a, b Option) int { return strings.Compare(a.Code, b.Code) })
+	return opts
 }

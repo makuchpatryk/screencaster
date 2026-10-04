@@ -205,9 +205,10 @@ Same selectors, same URL resolution against `baseUrl` (BR-010), same error shape
 
 - Fresh non-recorded context: 1920×1080, `storageState`, `baseURL` (FR-017).
 - Replays `actions` with executor in `explore` mode, then captures the page.
-- Snapshot source: Playwright ARIA snapshot (`Locator.AriaSnapshot` on `body`). It gives roles and accessible names as indented text. The explorer then post-processes each interactive line to append a ready-to-use selector `role=<role>[name="<name>"]`, checks uniqueness against the live page and adds `>> nth=N` where needed (ADR-47).
+- Snapshot source: Playwright ARIA snapshot (`Locator.AriaSnapshot` on `body`), lines like `- button "New project"`, `- textbox "Name": Demo`, `- option "Public" [selected]`, indented by nesting (spike S4, §17). The explorer appends ` -> role=<role>[name="<name>"]` right after the name and attributes of every named line whose role is interactive (button, link, textbox, checkbox, radio, combobox, menuitem, tab, option). It checks uniqueness with a `Count` call against the live page and adds ` >> nth=<i>` on a collision, `i` counting the earlier lines with the same selector (ADR-47).
 - Output capped at 50 000 chars with `truncated: true`.
-- On action failure: tool error with `{step, action, target, message}` plus the snapshot at that moment (FR-017 edge case).
+- On action failure: tool error with `{step, action, target, message}` plus the snapshot at that moment (FR-017 edge case). The initial navigation is step 0, the `actions` are steps 1..n.
+- Concurrent calls queue on a package-level mutex in `core/explorer`.
 
 ## 9. Error model
 
@@ -236,8 +237,9 @@ type Failure struct {
 SQLite via `modernc.org/sqlite`, file `<work>/.screencaster/jobs.db`. Schema is PRD §13. Additional notes:
 
 - Index on `(status, created_at)` for dequeue and position.
+- `created_at` is RFC 3339 UTC with a fixed 9-digit fraction (`2006-01-02T15:04:05.000000000Z`, Decision 57); `rowid` breaks ties, so back-to-back submissions keep FIFO order.
 - `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`. Only the MCP process opens the DB, so contention is limited to the request goroutines and the worker.
-- `position` (for `queued` jobs) = number of `queued` jobs with earlier `created_at`, plus 1.
+- `position` (for `queued` jobs) = number of `queued` jobs ordered before it by `(created_at, rowid)`, plus 1; a running job does not count.
 - Worker is woken by a buffered channel (`cap 1`) on insert. No polling loop needed. On start, recovery runs first (FR-015), so nothing is stale.
 
 ```mermaid
@@ -308,14 +310,14 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PRD log.
+Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PRD log; 56 and 57 are only here.
 
 | # | Decision | Alternatives | Rationale |
 |---|----------|--------------|-----------|
 | 44 | `explore_page` may overlap a running render; no shared browser lock | Shared semaphore; reject during render | User choice. Offsets come from timestamps, so correctness holds. Revisit if timing jitter shows up. |
 | 45 | `flock` lock file `.screencaster/render.lock` guards CLI vs MCP worker. CLI fails fast, worker waits | No lock; CLI enqueues via SQLite | User choice. Kernel releases on crash. Keeps PRD rule that CLI has no queue or job record. |
 | 46 | Recording `t0` = monotonic timestamp just before recorded page creation; no trimming; fixed compensation (90 ms, measured in the M2 spike, see §17) | Trim lead-in with `ffmpeg -ss` | User choice. Fewer moving parts. |
-| 47 | `explore_page` snapshot = ARIA snapshot plus derived, uniqueness-checked selectors | Deprecated `page.Accessibility.Snapshot`; raw DOM dump | Supported API. Guarantees the "selector works in render" AC. Needs M5 spike to confirm output format in playwright-go. |
+| 47 | `explore_page` snapshot = ARIA snapshot plus derived, uniqueness-checked selectors | Deprecated `page.Accessibility.Snapshot`; raw DOM dump | Supported API. Guarantees the "selector works in render" AC. Format confirmed in spike S4 (§17). |
 | 48 | Logs to stderr only, subprocess output captured | — | Required by MCP stdio. |
 | 49 | Clip duration read from the WAV header, not ffprobe | Spawn ffprobe per clip | No subprocess per clip, exact for PCM WAV. Piper emits PCM s16le WAV (confirmed in the M3 spike, see §17). |
 | 50 | Constant 30 fps forced during transcode | Pass VFR through | Keeps video time equal to wall time for `adelay` offsets. |
@@ -325,13 +327,24 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PR
 | 54 | e2e in module `tests/e2e`, local only (`make e2e`) | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. The pipeline is not verified in CI. |
 | 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
 | 56 | `make e2e-runtime`: the e2e test binary is compiled in the dev image and runs inside the runtime image, with `SCREENCASTER_BIN` pointing at the image's binary; the test process serves the fixture on 127.0.0.1 | CLI binary in the image, fixture in the dev container over a docker network (the original M4 plan) | Same coverage of the image's binary, Chromium, Piper and ffmpeg. No network, no docker-in-docker, nothing to orchestrate. |
+| 57 | Job timestamps use a fixed-width UTC layout with 9 fraction digits, not `RFC3339Nano` | `RFC3339Nano` | `RFC3339Nano` trims trailing zeros, so `…05Z` sorts after `…05.1Z` as text and breaks the `ORDER BY created_at`. Still valid RFC 3339. |
 
 ## 17. Open items for spikes
 
 1. **M2:** measure the gap between page creation and first recorded frame (ADR-46). **Done: compensation added.** Method: `t0` just before `NewPage`, `goto marker.html`, wait 1 s, click `#marker` (full-viewport white flash), then find the first dark→bright frame in the raw WebM with ffmpeg `signalstats`. Over 10 runs (dev image, playwright-go v0.6201.1) the flash frame sits **52–129 ms before** the click's offset from `t0`, mean ≈ 90 ms; 2 of 10 runs exceed 100 ms. The WebM has a 40 ms frame step, so each sample is ±40 ms. The sign is consistent: video time 0 is ~90 ms after `t0`, so clips placed at raw offsets play ~90 ms late. The mean sits just under the ADR-46 gate but the spread does not, so `recorder.LeadInCompensation = 90ms` is subtracted from every offset (clamped at 0). With it the residual is about ±40 ms. `TestRecord_leadInIsWithinTolerance` guards it; the M3 drift e2e measures audio vs flash end to end.
 2. **M2:** confirm strict-locator behavior of playwright-go for `click`/`hover`/`fill` and that ambiguous selectors fail with a usable message. **Done: passes.** Locators are strict by default. A selector matching 2 elements fails in ~10 ms for click, hover, fill and the cursor glide, with `strict mode violation: locator('a') resolved to 2 elements:` plus the candidates. The executor uses this directly, with no `Count()` pre-check. Guarded by `TestBrowser_ambiguousSelectorFailsFast` (e2e).
 3. **M3:** confirm Piper CLI flags and WAV format (sample rate, PCM) for ADR-49. **Done: passes.** `piper --model <voice>.onnx --output_file <out.wav>` with the text on stdin works for both built-in voices; no `--espeak_data` is needed because the binary finds `espeak-ng-data` next to itself. Output is PCM s16le, 22050 Hz, mono, with a plain `fmt ` (16 bytes) + `data` layout. The header duration (data bytes / byte rate, 80104 / 44100 = 1.816417 s) equals ffprobe's. Piper prints the output path on stdout (so stdout must not be inherited) and logs to stderr; a missing model aborts with exit 134 and `what(): Model file doesn't exist`. ADR-49 stands. Guarded by `TestParseWAV_durationFromHeader`.
-4. **M5:** confirm `Locator.AriaSnapshot` output in playwright-go and build the role→selector mapper (ADR-47).
+4. **M5:** confirm `Locator.AriaSnapshot` output in playwright-go and build the role→selector mapper (ADR-47). **Done: passes.** `page.Locator("body").AriaSnapshot()` returns YAML-like text, one `- role "name" [attrs]: value` line per node, two spaces per nesting level. On the fixture's projects page after opening the form:
+   ```
+   - heading "Projects" [level=1]
+   - button "New project"
+   - textbox "Name": Demo
+   - combobox "Visibility":
+     - option "Public" [selected]
+   - button "Create"
+   - contentinfo: Footer
+   ```
+   Nameless nodes (`- text: Name`) carry no quotes. A regexp over the leading `- role "name"` is enough to map lines to `role=<role>[name="<name>"]`, so the `Evaluate` DOM-walk fallback is not needed. The role selector matches names as case-insensitive substrings, hence the `Count` check and `>> nth=` suffix. Guarded by `TestExplore_selectorsWorkInARender` (e2e) and the mapper unit tests.
 
 ## 18. PRD inconsistencies
 

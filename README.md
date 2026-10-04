@@ -19,7 +19,7 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
    - `--init` forwards SIGTERM, so a stopped render cleans up.
    - `--add-host` lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
    - The container runs as root: files in `output/` belong to root.
-   - The MCP server (`screencaster-mcp`, arrives with M5) runs from the same image with `docker run -i`.
+   - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
 
 3. **Configure** your project (`screencaster.yaml`):
    ```yaml
@@ -108,14 +108,29 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 
 - Add extra Piper voices to `/work/voices/*.onnx` (FR-018)
 - Add `.screencaster/` to the `.gitignore` of the project you render (render lock, job DB, temp files)
-- The MCP server runs inside Docker. Configure in Claude Code with:
-  ```json
-  {
-    "name": "screencaster",
-    "command": "docker",
-    "args": ["run", "-i", "--rm", "--init", "--add-host=host.docker.internal:host-gateway", "-v", "<project>:/work", "screencaster", "screencaster-mcp"]
+
+## Claude Code (MCP)
+
+`screencaster-mcp` runs inside the image and talks to Claude Code over stdio. Add it to the project's `.mcp.json`, with `<project>` the absolute path of the repo that holds `screencaster.yaml`:
+
+```json
+{
+  "mcpServers": {
+    "screencaster": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "--init", "--add-host=host.docker.internal:host-gateway",
+               "-v", "<project>:/work", "screencaster", "screencaster-mcp"]
+    }
   }
-  ```
+}
+```
+
+- Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `get_render_status`, `explore_page` (accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
+- Prompt: `/mcp__screencaster__create_demo [description]` asks for languages, voices, audience and title in one message, explores the app, writes `demos/<name>.yaml` and renders it.
+- Jobs run one at a time, oldest first, and are kept in `.screencaster/jobs.db`. Jobs still queued or running when the server stops are marked `failed` with `interrupted` at the next start; they do not resume.
+- A CLI render and a queued job never run together: both take `.screencaster/render.lock`, and a job waits for it while still `queued`.
+- `explore_page` does not wait for the queue and may overlap a running render, which can make the video's pacing jitter.
+- Logs go to stderr; stdout carries protocol frames only.
 
 ## Author
 

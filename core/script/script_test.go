@@ -304,3 +304,57 @@ func TestSchemaJSON_isJSONAndCompiles(t *testing.T) {
 		t.Fatalf("schema does not compile: %v", err)
 	}
 }
+
+func TestValidateSteps_appliesTheScriptRules(t *testing.T) {
+	zero := 0
+	tests := []struct {
+		name    string
+		steps   []Step
+		wantPtr string // empty: valid
+	}{
+		{"no steps", nil, ""},
+		{"click with selector", []Step{{Action: "click", Selector: "#a"}}, ""},
+		{"scroll to zero", []Step{{Action: "scroll", Y: &zero}}, ""},
+		{"click without selector", []Step{{Action: "goto", URL: "/"}, {Action: "click"}}, "/steps/1"},
+		{"unknown action", []Step{{Action: "drag"}}, "/steps/0/action"},
+		{"scroll without target", []Step{{Action: "scroll"}}, "/steps/0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateSteps(tt.steps)
+			if tt.wantPtr == "" {
+				if err != nil {
+					t.Fatalf("ValidateSteps() = %v, want nil", err)
+				}
+				return
+			}
+			var ve failure.ValidationErrors
+			if !errors.As(err, &ve) {
+				t.Fatalf("ValidateSteps() = %v, want ValidationErrors", err)
+			}
+			if !strings.HasPrefix(ve[0].Pointer, tt.wantPtr) {
+				t.Errorf("first pointer = %q, want prefix %q", ve[0].Pointer, tt.wantPtr)
+			}
+		})
+	}
+}
+
+func TestAudiences_matchSchemaEnum(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			Meta struct {
+				Properties struct {
+					Audience struct {
+						Enum []string `json:"enum"`
+					} `json:"audience"`
+				} `json:"properties"`
+			} `json:"meta"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(SchemaJSON(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got := schema.Properties.Meta.Properties.Audience.Enum; !reflect.DeepEqual(got, Audiences) {
+		t.Errorf("schema audience enum = %v, Audiences = %v", got, Audiences)
+	}
+}

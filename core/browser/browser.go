@@ -241,3 +241,20 @@ func (s *Session) MoveTo(selector string, steps int) error {
 	}
 	return s.page.Mouse().Move(box.X+box.Width/2, box.Y+box.Height/2, playwright.MouseMoveOptions{Steps: playwright.Int(steps)})
 }
+
+// AriaSnapshot returns the accessibility tree of the page body as indented
+// text (explore_page, ARCHITECTURE §8).
+func (s *Session) AriaSnapshot() (string, error) {
+	return s.page.Locator("body").AriaSnapshot()
+}
+
+// Count returns how many elements match selector right now.
+func (s *Session) Count(selector string) (int, error) {
+	return s.page.Locator(selector).Count()
+}
+
+// Title returns the document title.
+func (s *Session) Title() (string, error) { return s.page.Title() }
+
+// URL returns the page's current address.
+func (s *Session) URL() string { return s.page.URL() }

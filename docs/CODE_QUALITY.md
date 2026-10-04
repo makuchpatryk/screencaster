@@ -51,6 +51,7 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 | Output filename and timestamp format (FR-010) | one function in `core/renderer` |
 | 30 s timeout, 25 cursor steps, 60 ms/char, 1920×1080, 30 fps | named constants in the owning package |
 | Job statuses and transitions | typed constants in `mcp/queue`. Nothing else compares status strings |
+| Audience values | `script.Audiences`; a test keeps it equal to the schema enum |
 
 - Derive, don't copy: tool description from the embedded schema, `get_options` voices from the directory scan, job `position` from a SQL count.
 - Extract on the third occurrence, and only if the copies change for the same reason.
@@ -162,4 +163,7 @@ Everything not in this table is a review point.
 - `PLAYWRIGHT_GO_VERSION` in the `dev` stage of the `Dockerfile` repeats the playwright-go version in `core/go.mod`. Bump both together (the runtime image reads it from `go.mod`).
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
-- Open spike (ARCHITECTURE §17): `AriaSnapshot` output. Update code and decision log when it resolves.
+- `modernc.org/sqlite` is pinned to v1.50.0 in `mcp/go.mod`, the newest release that builds on Go 1.25 (v1.60 needs 1.26). Bump it together with the Go version.
+- `cli/main.go` and `mcp/main.go` both wire Piper, ffmpeg, the recorder and `renderer.Deps` by hand, with the same image paths. That is two copies; extract a shared constructor on the third.
+- The `>> nth=<i>` suffix from `explore_page` assumes the matches appear in the snapshot in DOM order. It holds for ordinary pages; a page that reorders elements visually only is not covered.
+- `explore_page` actions go through `script.ValidateSteps`, so a `fill` with an empty `value` is reported as a missing `value` (the empty string is dropped when the steps are encoded). Clearing a field is not needed to find selectors.

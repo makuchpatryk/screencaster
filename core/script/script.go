@@ -49,17 +49,23 @@ type Meta struct {
 }
 
 // Step is one action plus optional narration keyed by language code. Y and Ms
-// are pointers because 0 is a valid scroll position.
+// are pointers because 0 is a valid scroll position. The omitempty tags keep
+// an unset field out of the JSON, which ValidateSteps feeds to the schema and
+// the explore_page input schema is inferred from.
 type Step struct {
 	Action    string            `json:"action"`
-	URL       string            `json:"url"`
-	Selector  string            `json:"selector"`
-	Value     string            `json:"value"`
-	Key       string            `json:"key"`
-	Y         *int              `json:"y"`
-	Ms        *int              `json:"ms"`
-	Narration map[string]string `json:"narration"`
+	URL       string            `json:"url,omitempty"`
+	Selector  string            `json:"selector,omitempty"`
+	Value     string            `json:"value,omitempty"`
+	Key       string            `json:"key,omitempty"`
+	Y         *int              `json:"y,omitempty"`
+	Ms        *int              `json:"ms,omitempty"`
+	Narration map[string]string `json:"narration,omitempty"`
 }
+
+// Audiences are the meta.audience values; a test keeps them equal to the
+// schema's enum. get_options offers them (FR-018).
+var Audiences = []string{"release-notes", "sales", "marketing"}
 
 // SchemaJSON returns the embedded JSON Schema, for the render_video tool
 // description.
@@ -112,6 +118,25 @@ func Parse(data []byte) (Script, error) {
 		return Script{}, fmt.Errorf("decode script: %w", err)
 	}
 	return s, nil
+}
+
+// ValidateSteps checks loose steps (explore_page actions) against the same
+// schema as a script, so the executor never meets a step without the fields
+// its action needs. Pointers read /steps/<i>/... like a script's. Empty steps
+// are fine.
+func ValidateSteps(steps []Step) error {
+	if len(steps) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(struct {
+		Name  string `json:"name"`
+		Steps []Step `json:"steps"`
+	}{"explore", steps})
+	if err != nil {
+		return fmt.Errorf("encode steps: %w", err)
+	}
+	_, err = Parse(data)
+	return err
 }
 
 // schemaErrors turns the leaves of the validator's error tree into sorted,

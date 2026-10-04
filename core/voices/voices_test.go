@@ -142,3 +142,50 @@ func TestResolve(t *testing.T) {
 		})
 	}
 }
+
+// FR-018 acceptance criteria.
+func TestOptions(t *testing.T) {
+	stock := Installed{
+		"en_US-ryan-high":      "/v/en",
+		"pl_PL-darkman-medium": "/v/pl",
+	}
+	withExtras := Installed{
+		"en_US-ryan-high":       "/v/en",
+		"pl_PL-darkman-medium":  "/v/pl",
+		"pl_PL-gosia-medium":    "/v/gosia",
+		"de_DE-thorsten-medium": "/v/de",
+		"README":                "/v/ignored",
+	}
+	tests := []struct {
+		name string
+		inst Installed
+		cfg  map[string]string
+		want []Option
+	}{
+		{"stock image", stock, nil, []Option{
+			{"en", true, "en_US-ryan-high", []string{"en_US-ryan-high"}},
+			{"pl", false, "pl_PL-darkman-medium", []string{"pl_PL-darkman-medium"}},
+		}},
+		{"extra pl voice and a language without default", withExtras, nil, []Option{
+			{"de", false, "", []string{"de_DE-thorsten-medium"}},
+			{"en", true, "en_US-ryan-high", []string{"en_US-ryan-high"}},
+			{"pl", false, "pl_PL-darkman-medium", []string{"pl_PL-darkman-medium", "pl_PL-gosia-medium"}},
+		}},
+		{"config voice beats built-in", withExtras, map[string]string{"pl": "pl_PL-gosia-medium", "de": "de_DE-thorsten-medium"}, []Option{
+			{"de", false, "de_DE-thorsten-medium", []string{"de_DE-thorsten-medium"}},
+			{"en", true, "en_US-ryan-high", []string{"en_US-ryan-high"}},
+			{"pl", false, "pl_PL-gosia-medium", []string{"pl_PL-darkman-medium", "pl_PL-gosia-medium"}},
+		}},
+		{"en and pl always listed, default needs an installed voice", Installed{}, nil, []Option{
+			{"en", true, "", []string{}},
+			{"pl", false, "", []string{}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Options(tt.inst, tt.cfg); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Options() = %+v\nwant %+v", got, tt.want)
+			}
+		})
+	}
+}
