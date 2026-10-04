@@ -10,12 +10,16 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
    go build -o screencaster-mcp ./mcp
    ```
 
-2. **Docker** (recommended for rendering; the runtime image arrives with M4):
+2. **Docker** (recommended; one image holds both binaries, Chromium, Piper, both voices and ffmpeg):
    ```bash
-   docker build -t screencaster .
-   docker run -i --rm --init --add-host=host.docker.internal:host-gateway \
-     -v $(pwd):/work screencaster screencaster-mcp
+   make image        # or: docker build -t screencaster .
+   docker run --rm --init --add-host=host.docker.internal:host-gateway \
+     -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml
    ```
+   - `--init` forwards SIGTERM, so a stopped render cleans up.
+   - `--add-host` lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
+   - The container runs as root: files in `output/` belong to root.
+   - The MCP server (`screencaster-mcp`, arrives with M5) runs from the same image with `docker run -i`.
 
 3. **Configure** your project (`screencaster.yaml`):
    ```yaml
@@ -77,7 +81,14 @@ make vet         # go vet in every module
 make lint        # golangci-lint (incl. import-boundary rules) in every module
 ```
 
-`make e2e` and `make image` arrive with M3 and M4. E2E runs locally only, not in CI.
+```bash
+make image         # build the runtime image
+make image-check   # built-in voices from core/voices are present in it
+make e2e           # real Chromium, Piper, ffmpeg in the dev image
+make e2e-runtime   # the CLI tests against the runtime image
+```
+
+E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-in test is timing-sensitive.
 
 ## Scripts
 

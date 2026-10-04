@@ -140,7 +140,8 @@ CI is as specified in PRD §18. `make lint`, `make vet` and `make test` run the 
 | `golangci-lint` (with a `depguard` rule for the import boundaries above) | unused code, error handling, boundary rules |
 | `go test ./...` for each workspace module | `core` rules (resolution, validation, timing math), queue order and recovery, schema accepts the example script and rejects invalid samples |
 | `make e2e` in the dev image (local, not in CI, Decision 54) | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render |
-| `docker build` (CI job from M4) | image contents, built-in voices present |
+| `make image` + `make image-check` (CI `image` job) | image builds, built-in voices (names from `core/voices`) present |
+| `make e2e-runtime` (local) | the image's own binary, Chromium, Piper and ffmpeg render a video |
 
 Everything not in this table is a review point.
 
@@ -158,6 +159,7 @@ Everything not in this table is a review point.
 
 ## Known debt
 
+- `PLAYWRIGHT_GO_VERSION` in the `dev` stage of the `Dockerfile` repeats the playwright-go version in `core/go.mod`. Bump both together (the runtime image reads it from `go.mod`).
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
 - Open spike (ARCHITECTURE §17): `AriaSnapshot` output. Update code and decision log when it resolves.

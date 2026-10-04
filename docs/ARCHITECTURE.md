@@ -73,7 +73,7 @@ testdata/
   fixture-app/             static HTML app for e2e
   scripts/valid|invalid/   sample scripts for the core/script tests
 Dockerfile                 stages: dev -> build -> runtime
-Makefile                   dev-image, test, vet, lint, e2e (all run in the dev image)
+Makefile                   dev-image, image, image-check, test, vet, lint, e2e, e2e-runtime (Go tooling runs in the dev image)
 .golangci.yml              depguard rules for the dependency rules below
 ```
 
@@ -278,7 +278,9 @@ stateDiagram-v2
 - Voice discovery scans `/opt/piper/voices` and `/work/voices`. The language code is the voice name up to the first `_` (FR-018).
 - Network: `--add-host=host.docker.internal:host-gateway` makes `baseUrl` reach the host app on Linux (Decision 27).
 - **Stdio hygiene.** MCP uses stdout for protocol frames. All logging goes to stderr. Subprocess stdout/stderr (Piper, ffmpeg, Playwright driver) is captured and never inherited. A stray byte on stdout corrupts the session.
-- Image build is multi-stage: Go build stage, then runtime stage.
+- Image build is multi-stage: `piper` (Piper + voices, shared with `dev`), `dev` (toolchain for `make`), `build` (static `screencaster` and `screencaster-mcp`, plus the playwright CLI at the version `core/go.mod` pins), `runtime` (last, so `docker build .` yields it). `runtime` is `debian:bookworm-slim` + Chromium (via `playwright install --with-deps`) + ffmpeg + Piper + both binaries in `/usr/local/bin`.
+- The runtime image runs as root with `WORKDIR /work`, so output files in the mounted project are owned by root. Use `docker run --init` so SIGTERM reaches the process (§6.4).
+- `make image-check` lists `/opt/piper/voices` in the image and requires the `.onnx` and `.onnx.json` of every built-in voice in `core/voices`.
 
 ## 13. Testing strategy
 
@@ -286,9 +288,9 @@ stateDiagram-v2
 |-------|-------|-------|
 | Unit | config, schema, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler` |
 | Integration | SQLite store, lock file semantics, MCP tool/prompt wiring via in-memory transport | `go test` |
-| E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | `make e2e` in the dev image, locally (Decision 54) |
+| E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | `make e2e` in the dev image, locally (Decision 54); `make e2e-runtime` runs the CLI tests against the runtime image (Decision 56) |
 
-CI (GitHub Actions): `golangci-lint`, `go vet`, `go test -race` per module; a `docker build` job from M4. E2E does not run in CI (Decision 54).
+CI (GitHub Actions): `golangci-lint`, `go vet`, `go test -race` per module; an `image` job (`make image` + `make image-check`, no push). E2E does not run in CI (Decision 54).
 
 ## 14. Security notes
 
@@ -322,6 +324,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PR
 | 53 | `cobra` for the CLI | std `flag` | User choice; documented deviation from KISS (CODE_QUALITY). |
 | 54 | e2e in module `tests/e2e`, local only (`make e2e`) | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. The pipeline is not verified in CI. |
 | 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
+| 56 | `make e2e-runtime`: the e2e test binary is compiled in the dev image and runs inside the runtime image, with `SCREENCASTER_BIN` pointing at the image's binary; the test process serves the fixture on 127.0.0.1 | CLI binary in the image, fixture in the dev container over a docker network (the original M4 plan) | Same coverage of the image's binary, Chromium, Piper and ffmpeg. No network, no docker-in-docker, nothing to orchestrate. |
 
 ## 17. Open items for spikes
 

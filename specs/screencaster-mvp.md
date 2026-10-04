@@ -307,7 +307,7 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
 - [x] **M1** (steps 1–13): FR-001/FR-002 tests green, `make test|vet|lint` clean (CI pending: no remote configured yet)
 - [x] **M2** (steps 14–21): fixture recording works; S1/S2 in ARCHITECTURE §17; `make e2e` green — 54 s, 5 e2e tests pass; S1 drift now 2 ms with compensation
 - [x] **M3** (steps 22–30): `screencaster render` EN and EN+PL pass ffprobe, drift ≤ 100 ms, NFR-001; S3 recorded — e2e 7 tests green (151 s), drift 37 ms, NFR-001 ratio 1.87; lint/vet/test clean
-- [ ] **M4** (steps 31–35): runtime image builds, `make image-check` and runtime e2e pass
+- [x] **M4** (steps 31–35): runtime image builds, `make image-check` and runtime e2e pass — e2e-runtime 2 tests green, host.docker.internal render ok; dev-image, vet, lint, test clean
 - [ ] **M5** (steps 36–43): MCP tools/queue tests green, S4 recorded, manual Claude Code run done
 
 ## Implementation Steps
@@ -474,6 +474,13 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
 35. CI: add a `docker build --target runtime` job (no push).
 
 **DoD:** PRD M4 DoD.
+
+**Status (2026-10-04):** steps 31–35 implemented. `make image-check` passes; `make e2e-runtime` passes (2 CLI tests, 112 s incl. build; EN+PL ratio 1.91, drift 43 ms). FR-016 AC2 checked by hand: a render of a `python3 -m http.server :3000` host app through `--add-host=host.docker.internal:host-gateway` exited 0 and wrote the MP4. Deviations from the plan:
+- **Stages:** a shared `piper` stage feeds both `dev` and `runtime`, so they run the same Piper bytes. `runtime` is last, so `docker build .` yields it.
+- **Playwright CLI in the runtime image** is built from the version `core/go.mod` pins (`go build github.com/mxschmitt/playwright-go/cmd/playwright`), then removed after `playwright install --with-deps chromium`.
+- **Step 33 changed (ADR-56):** the e2e test binary is compiled in the dev image and runs inside the runtime image (`SCREENCASTER_BIN` selects the image's binary), instead of a shared docker network. Same coverage, no orchestration.
+- **Step 34:** the AC2 steps are in the README Docker section. Files in `output/` are owned by root (the container runs as root).
+- **Step 35:** CI `image` job runs `make image` and `make image-check`.
 
 ### M5 — MCP server & queue (FR-012…FR-019)
 

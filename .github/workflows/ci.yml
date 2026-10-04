@@ -32,3 +32,12 @@ jobs:
           working-directory: ${{ matrix.module }}
       - run: go vet ./...
       - run: go test -race ./...
+
+  # Image contents and built-in voices (CODE_QUALITY Enforcement). Build only,
+  # no push.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make image
+      - run: make image-check

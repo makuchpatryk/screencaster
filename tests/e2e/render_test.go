@@ -92,9 +92,13 @@ steps:
 
 var outputName = regexp.MustCompile(`^e2e-demo\.(en|pl)\.(\d{8}T\d{6}Z)\.mp4$`)
 
-// cliBinary builds the screencaster binary once per test run.
+// cliBinary builds the screencaster binary, or returns the one named by
+// SCREENCASTER_BIN: `make e2e-runtime` points it at the runtime image's binary.
 func cliBinary(t *testing.T) string {
 	t.Helper()
+	if bin := os.Getenv("SCREENCASTER_BIN"); bin != "" {
+		return bin
+	}
 	bin := filepath.Join(t.TempDir(), "screencaster")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = "../../cli"
