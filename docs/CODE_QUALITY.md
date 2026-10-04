@@ -162,6 +162,7 @@ Everything not in this table is a review point.
 
 - `PLAYWRIGHT_GO_VERSION` in the `dev` stage of the `Dockerfile` repeats the playwright-go version in `core/go.mod`. Bump both together (the runtime image reads it from `go.mod`).
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
+- The fixed 90 ms lead-in (ADR-46) is wrong when the WebM start lands in its late mode (~590 ms, ARCHITECTURE §17.1), so narration plays late in some renders. The e2e drift bound is ±150 ms, not FR-007's ±100 ms (`maxDrift`). Measure the lead-in per recording, then tighten the bound.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
 - `modernc.org/sqlite` is pinned to v1.50.0 in `mcp/go.mod`, the newest release that builds on Go 1.25 (v1.60 needs 1.26). Bump it together with the Go version.
 - `cli/main.go` and `mcp/main.go` both wire Piper, ffmpeg, the recorder and `renderer.Deps` by hand, with the same image paths. That is two copies; extract a shared constructor on the third.

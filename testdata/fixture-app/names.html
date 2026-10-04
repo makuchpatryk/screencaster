@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Names</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- explore_page selectors: "Save" is a substring of the earlier "Save all",
+       and the two "Delete" buttons share one name. -->
+  <button data-id="save-all">Save all</button>
+  <button data-id="save">Save</button>
+  <button data-id="delete-1">Delete</button>
+  <button data-id="delete-2">Delete</button>
+  <p id="clicked">none</p>
+  <script>
+    for (const b of document.querySelectorAll("button")) {
+      b.addEventListener("click", () => {
+        document.getElementById("clicked").textContent = "clicked " + b.dataset.id;
+      });
+    }
+  </script>
+</body>
+</html>

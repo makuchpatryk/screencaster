@@ -77,6 +77,42 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 	}
 }
 
+// ARCHITECTURE §7, §8: a name that is a substring of an earlier one ("Save"
+// after "Save all") and a repeated name ("Delete") each get a selector that
+// clicks exactly the element on its line. role= compares whole names, so only
+// the repeated one needs nth.
+func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
+	base := fixtureApp(t)
+	dir := project(t, base)
+	ex := newExplorer()
+	in := explorer.Input{
+		BaseURL:      base,
+		StorageState: filepath.Join(dir, "auth", "storageState.json"),
+		URL:          "/names.html",
+	}
+	out, err := ex.Explore(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct{ name, clicked string }{
+		{"Save all", "save-all"},
+		{"Save", "save"},
+		{"Delete", "delete-1"}, // selectorFor takes the first "Delete" line
+	} {
+		sel := selectorFor(t, out.Snapshot, "button", c.name)
+		in.Actions = []script.Step{{Action: "click", Selector: sel}}
+		got, err := ex.Explore(context.Background(), in)
+		if err != nil {
+			t.Fatalf("click %s: %v", sel, err)
+		}
+		want := regexp.MustCompile(`(?m)^- paragraph: clicked ` + regexp.QuoteMeta(c.clicked) + `$`)
+		if !want.MatchString(got.Snapshot) {
+			t.Errorf("%s did not click %s, snapshot:\n%s", sel, c.clicked, got.Snapshot)
+		}
+	}
+}
+
 // FR-017 edge case: a failing action names its step and still returns the page.
 func TestExplore_failedActionKeepsSnapshot(t *testing.T) {
 	base := fixtureApp(t)

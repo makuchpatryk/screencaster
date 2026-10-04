@@ -138,9 +138,8 @@ var lineRE = regexp.MustCompile(`^\s*- ([a-z]+)(?: ("(?:[^"\\]|\\.)*"))?(?: \[[^
 // annotate appends `-> <selector>` to every named interactive line. A
 // selector matching several elements gets `>> nth=<i>` where i counts the
 // earlier lines with the same selector, so the result is unique and strict
-// (FR-017, ARCHITECTURE §7). The Playwright role selector matches names as
-// case-insensitive substrings, which is why "Save" can collide with
-// "Save all".
+// (FR-017, ARCHITECTURE §7). The role= selector compares the whole name, so
+// "Save" does not match "Save all" (TestExplore_selectorsPickTheirOwnElement).
 func annotate(raw string, count func(selector string) (int, error)) (string, error) {
 	seen := map[string]int{}
 	lines := strings.Split(raw, "\n")
