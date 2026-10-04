@@ -37,7 +37,7 @@ func TestRecord_fixtureApp(t *testing.T) {
 		{Action: "wait", Ms: intp(200)},
 	}
 
-	out, err := newRecorder(t, base, nil).Record(context.Background(), recordInput(t, "en", steps))
+	out, err := newRecorder(t, nil).Record(context.Background(), recordInput(t, base, "en", steps))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,14 +52,14 @@ func TestRecord_fixtureApp(t *testing.T) {
 // FR-004 AC1: each language is its own recording from a fresh context.
 func TestRecord_twoRecordingsAreIndependent(t *testing.T) {
 	base := fixtureApp(t)
-	rec := newRecorder(t, base, nil)
+	rec := newRecorder(t, nil)
 	steps := []script.Step{{Action: "goto", URL: "/index.html"}, {Action: "wait", Selector: "#logged-in"}}
 
-	en, err := rec.Record(context.Background(), recordInput(t, "en", steps))
+	en, err := rec.Record(context.Background(), recordInput(t, base, "en", steps))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pl, err := rec.Record(context.Background(), recordInput(t, "pl", steps))
+	pl, err := rec.Record(context.Background(), recordInput(t, base, "pl", steps))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestRecord_missingSelectorAbortsWithinTimeout(t *testing.T) {
 		{Action: "goto", URL: "/index.html"},
 	}
 
-	_, err := newRecorder(t, base, &launched).Record(context.Background(), recordInput(t, "en", steps))
+	_, err := newRecorder(t, &launched).Record(context.Background(), recordInput(t, base, "en", steps))
 	elapsed := time.Since(launched)
 
 	var f *failure.Failure
@@ -180,7 +180,7 @@ func TestRecord_leadInIsWithinTolerance(t *testing.T) {
 	}
 }
 
-func recordInput(t *testing.T, lang string, steps []script.Step) recorder.Input {
+func recordInput(t *testing.T, base, lang string, steps []script.Step) recorder.Input {
 	t.Helper()
-	return recorder.Input{Steps: steps, Lang: lang, Dir: t.TempDir()}
+	return recorder.Input{Steps: steps, Lang: lang, Dir: t.TempDir(), BaseURL: base, StorageState: storageStatePath(t)}
 }

@@ -144,7 +144,7 @@ func New(p Page, baseURL string, m Mode) *Executor
 func (e *Executor) Run(ctx context.Context, i int, s script.Step) error // *failure.Failure (Lang filled by recorder)
 
 // core/lock
-func TryAcquire(path string) (*Lock, error) // ErrHeld → CLI prints "another render is running"
+func TryAcquire(path string) (*Lock, error) // ErrHeld → CLI maps it to "another render is running"
 func Acquire(ctx context.Context, path string) (*Lock, error)
 func (l *Lock) Release() error               // unlock + close; never deletes the file
 ```
@@ -306,7 +306,7 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
 
 - [x] **M1** (steps 1–13): FR-001/FR-002 tests green, `make test|vet|lint` clean (CI pending: no remote configured yet)
 - [x] **M2** (steps 14–21): fixture recording works; S1/S2 in ARCHITECTURE §17; `make e2e` green — 54 s, 5 e2e tests pass; S1 drift now 2 ms with compensation
-- [ ] **M3** (steps 22–30): `screencaster render` EN and EN+PL pass ffprobe, drift ≤ 100 ms, NFR-001; S3 recorded
+- [x] **M3** (steps 22–30): `screencaster render` EN and EN+PL pass ffprobe, drift ≤ 100 ms, NFR-001; S3 recorded — e2e 7 tests green (151 s), drift 37 ms, NFR-001 ratio 1.87; lint/vet/test clean
 - [ ] **M4** (steps 31–35): runtime image builds, `make image-check` and runtime e2e pass
 - [ ] **M5** (steps 36–43): MCP tools/queue tests green, S4 recorded, manual Claude Code run done
 
@@ -453,6 +453,17 @@ ffmpeg -y -i rec.webm -i c1.wav -i c3.wav \
 30. **Makefile `e2e` target.** Update ARCHITECTURE §17 (S3) and CODE_QUALITY Enforcement.
 
 **DoD:** PRD M3 DoD.
+
+**Status (2026-10-04):** steps 22–30 implemented. `make e2e` green (151 s, 7 tests). The EN+PL render took 40.2 s for 21.5 s of video (NFR-001 ratio 1.87), and drift was 37 ms. Deviations from the plan:
+- **Piper path:** the release tarball is flat, so the binary is `/opt/piper/piper` (libs and `espeak-ng-data` sit next to it), not `/opt/piper/bin/piper`. Voices come from HF revision `c10ece1a…`. Everything is sha256-pinned in the Dockerfile.
+- **S3 result:** passes. Output is PCM s16le, 22050 Hz mono, with a plain `fmt ` + `data` layout. The header duration matches ffprobe exactly. No `--espeak_data` flag is needed. Piper prints the output path on stdout, so stdout goes to the null device. ADR-49 stands.
+- **ffmpeg:** `apad` + `-shortest` never terminates in ffmpeg 5.1, so it was dropped. The clips are mixed unpadded, and the output length is still the video length, because the recorder makes the video cover all audio. With zero clips, `anullsrc` is mapped directly with `-shortest`. Recorded in ARCHITECTURE §5.
+- **`core/lock`** uses stdlib `syscall.Flock`, not `golang.org/x/sys/unix` (KISS, no new dependency).
+- **`recorder.Input`** gains `BaseURL`, `StorageState` and `OnStep`. `Launch` takes `recorder.LaunchOptions`, because config is known only after `Prepare` runs inside `Render`. `recorder.New(launch)` no longer takes `baseURL`.
+- **`renderer.Deps`** also carries `Voices voices.Installed`, which main discovers. `Request.Progress` is in place. `executor.Target` is exported, so progress lines and failures share one target rule.
+- **Publish** removes already-moved files if a later move fails, which keeps BR-004 intact at the publish step.
+- **Step 30** (Makefile `e2e`) was already done in M2. The e2e test bounds each CLI run at 4 min.
+- **Flaky S1:** `TestRecord_leadInIsWithinTolerance` read −121 ms once, while lint and unit containers were loading the CPU, and 40 ms when run alone. Run `make e2e` on an idle machine.
 
 ### M4 — Docker image (FR-016 image part)
 

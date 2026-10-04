@@ -31,19 +31,26 @@ type Session interface {
 	Abort()
 }
 
+// LaunchOptions configure the fresh browser context of one recording
+// (FR-004).
+type LaunchOptions struct {
+	VideoDir     string
+	BaseURL      string
+	StorageState string
+}
+
 // Recorder records one language at a time. Launch, Now and Sleep are injected
 // so timing is testable with a fake clock; New fills in the real ones.
 type Recorder struct {
-	// Launch opens a session that records video into dir.
-	Launch  func(ctx context.Context, dir string) (Session, error)
-	BaseURL string
-	Now     func() time.Time
-	Sleep   func(ctx context.Context, d time.Duration) error
+	// Launch opens a session that records video into o.VideoDir.
+	Launch func(ctx context.Context, o LaunchOptions) (Session, error)
+	Now    func() time.Time
+	Sleep  func(ctx context.Context, d time.Duration) error
 }
 
 // New returns a Recorder on the real clock.
-func New(launch func(ctx context.Context, dir string) (Session, error), baseURL string) Recorder {
-	return Recorder{Launch: launch, BaseURL: baseURL, Now: time.Now, Sleep: sleep}
+func New(launch func(ctx context.Context, o LaunchOptions) (Session, error)) Recorder {
+	return Recorder{Launch: launch, Now: time.Now, Sleep: sleep}
 }
 
 func sleep(ctx context.Context, d time.Duration) error {
@@ -58,12 +65,16 @@ func sleep(ctx context.Context, d time.Duration) error {
 }
 
 // Input is one language's recording job. Clips maps a step index (0-based, into
-// Steps) to the duration of its narration clip.
+// Steps) to the duration of its narration clip. OnStep, when set, is called
+// with the 0-based index right before each step runs (CLI progress).
 type Input struct {
-	Steps []script.Step
-	Clips map[int]time.Duration
-	Lang  string
-	Dir   string // video output directory
+	Steps        []script.Step
+	Clips        map[int]time.Duration
+	Lang         string
+	Dir          string // video output directory
+	BaseURL      string
+	StorageState string
+	OnStep       func(i int)
 }
 
 // Output is a finished recording. Offsets[i] is when Steps[i] starts in the
@@ -79,11 +90,11 @@ type Output struct {
 // ends, ctx.Err() is returned. Temp files live under in.Dir; the caller removes
 // them.
 func (r Recorder) Record(ctx context.Context, in Input) (Output, error) {
-	sess, err := r.Launch(ctx, in.Dir)
+	sess, err := r.Launch(ctx, LaunchOptions{VideoDir: in.Dir, BaseURL: in.BaseURL, StorageState: in.StorageState})
 	if err != nil {
 		return Output{}, fmt.Errorf("launch browser (%s): %w", in.Lang, err)
 	}
-	ex, err := executor.New(sess, r.BaseURL, executor.Mode{Visuals: true})
+	ex, err := executor.New(sess, in.BaseURL, executor.Mode{Visuals: true})
 	if err != nil {
 		sess.Abort()
 		return Output{}, err
@@ -101,6 +112,9 @@ func (r Recorder) Record(ctx context.Context, in Input) (Output, error) {
 	for i, step := range in.Steps {
 		start := r.Now()
 		offsets[i] = max(start.Sub(t0)-LeadInCompensation, 0)
+		if in.OnStep != nil {
+			in.OnStep(i)
+		}
 
 		err := ex.Run(ctx, i+1, step)
 		if err == nil {

@@ -61,10 +61,9 @@ func (f *fakeSession) Fill(sel, _ string, _ time.Duration) error { return f.act(
 
 func newRecorder(sess *fakeSession) Recorder {
 	return Recorder{
-		Launch:  func(context.Context, string) (Session, error) { return sess, nil },
-		BaseURL: "http://app.test",
-		Now:     sess.clk.now,
-		Sleep:   sess.clk.sleep,
+		Launch: func(context.Context, LaunchOptions) (Session, error) { return sess, nil },
+		Now:    sess.clk.now,
+		Sleep:  sess.clk.sleep,
 	}
 }
 
@@ -162,7 +161,7 @@ func TestRecord_cancelAbortsBrowser(t *testing.T) {
 
 func TestRecord_launchFailureIsReported(t *testing.T) {
 	boom := errors.New("no chromium")
-	r := Recorder{Launch: func(context.Context, string) (Session, error) { return nil, boom }}
+	r := Recorder{Launch: func(context.Context, LaunchOptions) (Session, error) { return nil, boom }}
 
 	_, err := r.Record(context.Background(), Input{Lang: "pl"})
 	if !errors.Is(err, boom) {
@@ -185,5 +184,39 @@ func TestRecord_offsetsAreShiftedByLeadIn(t *testing.T) { // ADR-46, spike S1
 	}
 	if want := time.Second - LeadInCompensation; out.Offsets[1] != want {
 		t.Errorf("second offset = %v, want %v", out.Offsets[1], want)
+	}
+}
+
+func TestRecord_launchGetsContextSettings(t *testing.T) { // FR-004
+	clk := &clock{t: time.Unix(1000, 0)}
+	sess := &fakeSession{clk: clk}
+	var got LaunchOptions
+	r := newRecorder(sess)
+	r.Launch = func(_ context.Context, o LaunchOptions) (Session, error) { got = o; return sess, nil }
+
+	_, err := r.Record(context.Background(), Input{
+		Steps: []script.Step{click("#a")}, Lang: "en",
+		Dir: "/tmp/run/en", BaseURL: "http://app.test", StorageState: "/work/auth/s.json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := LaunchOptions{VideoDir: "/tmp/run/en", BaseURL: "http://app.test", StorageState: "/work/auth/s.json"}
+	if got != want {
+		t.Errorf("launch options = %+v, want %+v", got, want)
+	}
+}
+
+func TestRecord_onStepReportsEachStepBeforeItRuns(t *testing.T) {
+	clk := &clock{t: time.Unix(1000, 0)}
+	sess := &fakeSession{clk: clk, failSel: "#c"}
+	var seen []int
+
+	_, _ = newRecorder(sess).Record(context.Background(), Input{
+		Steps: []script.Step{click("#a"), click("#b"), click("#c"), click("#d")}, Lang: "en",
+		OnStep: func(i int) { seen = append(seen, i) },
+	})
+	if want := []int{0, 1, 2}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("OnStep calls = %v, want %v", seen, want)
 	}
 }

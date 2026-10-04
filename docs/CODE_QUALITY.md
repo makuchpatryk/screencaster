@@ -32,7 +32,7 @@ Build for the PRD, not for what might come.
 - Keep PRD §10.3 out: login steps, masking, other formats, cloud TTS, web UI, auto-deletion, CI-triggered renders, schema-only tool.
 - Keep PRD §10.2 out: slides, overlays, multi-tenancy. No hooks "for later" beyond what ARCHITECTURE §15 already names.
 - No second TTS engine, browser, storage backend or output format. Only languages are open-ended (BR-002).
-- `Browser`, `Synthesizer` and `Assembler` interfaces exist as test seams, not for swapping Chromium, Piper or ffmpeg. No interface without a test seam.
+- `Recorder`, `Synthesizer` and `Assembler` interfaces (in `core/renderer`) and `Page`/`Session` (in `core/executor`/`core/recorder`) exist as test seams, not for swapping Chromium, Piper or ffmpeg. No interface without a test seam.
 - No retries, backoff or configurable timeouts. BR-004: one 30 s timeout, then abort.
 - No scale design. One worker, one SQLite file, one render at a time (BR-008).
 
@@ -94,7 +94,7 @@ Applied to packages, functions and small structs.
 - New step action = schema entry plus one case in the executor's single dispatch.
 - New failure kind = a constructor for the shared `Failure`, not a new path through CLI and MCP.
 
-**Liskov substitution.** Fakes of `Browser`, `Synthesizer` and `Assembler` return the same error types, respect `ctx` cancellation and leave no files behind, like the real ones. The executor behaves identically in both modes except visuals, so an explore selector works in a render (FR-017 AC3).
+**Liskov substitution.** Fakes of `Recorder`, `Synthesizer`, `Assembler` and `Session` return the same error types, respect `ctx` cancellation and leave no files behind, like the real ones. The executor behaves identically in both modes except visuals, so an explore selector works in a render (FR-017 AC3).
 
 **Interface segregation.** Interfaces are small and declared by the consumer (`renderer` declares the 1–3 methods it needs). Functions take what they use: `resolveVoices(langs, scriptVoices, cfgVoices, installed)` takes maps and a set, not `Config` and `Script`.
 
@@ -113,8 +113,8 @@ Applied to packages, functions and small structs.
 
 Go has no inheritance. The rule is about not rebuilding it.
 
-- Hold collaborators as named fields: `renderer.Deps{TTS, Browser, Assembler}`.
-- `Render` calls small functions (`validate`, `recordLanguage`, `assemble`, `publish`). CLI and MCP both call the same `renderer.Render` (ARCHITECTURE §4).
+- Hold collaborators as named fields: `renderer.Deps{TTS, Rec, Asm}`.
+- `Render` calls small functions (`Prepare`, `renderLanguage`, `publish`). CLI and MCP both call the same `renderer.Render` (ARCHITECTURE §4).
 - Don't embed a struct just to inherit its methods. Embedding is fine for plumbing like `sync.Mutex` in a private struct, never for domain types or across packages.
 - No "base" type customised through overridden hooks.
 - No long boolean-flag lists making one function impersonate several.
@@ -160,4 +160,4 @@ Everything not in this table is a review point.
 
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
-- Open spikes (ARCHITECTURE §17): Piper WAV format, `AriaSnapshot` output. Update code and decision log as each resolves.
+- Open spike (ARCHITECTURE §17): `AriaSnapshot` output. Update code and decision log when it resolves.

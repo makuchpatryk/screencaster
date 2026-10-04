@@ -69,10 +69,7 @@ func New(p Page, baseURL string, m Mode) (*Executor, error) {
 // Run executes step s, the i-th (1-based) of the script. Any error comes back
 // as *failure.Failure without Lang; the recorder fills that in.
 func (e *Executor) Run(ctx context.Context, i int, s script.Step) error {
-	target := s.Selector
-	if s.Action == "goto" {
-		target = s.URL
-	}
+	target := Target(s)
 	if err := ctx.Err(); err != nil {
 		return failure.Step(i, "", s.Action, target, err)
 	}
@@ -80,6 +77,16 @@ func (e *Executor) Run(ctx context.Context, i int, s script.Step) error {
 		return failure.Step(i, "", s.Action, target, err)
 	}
 	return nil
+}
+
+// Target is what a step acts on: the URL for goto, else the selector (empty
+// for a key press without one, or a timed wait). Failures and CLI progress
+// both show it.
+func Target(s script.Step) string {
+	if s.Action == "goto" {
+		return s.URL
+	}
+	return s.Selector
 }
 
 func (e *Executor) dispatch(ctx context.Context, s script.Step) error {

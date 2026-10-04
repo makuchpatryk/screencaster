@@ -43,13 +43,13 @@ func storageStatePath(t *testing.T) string {
 // newRecorder wires a real recorder like main does. launched, when not nil,
 // receives the time the browser was ready, so tests can time the steps without
 // the Chromium start-up.
-func newRecorder(t *testing.T, baseURL string, launched *time.Time) recorder.Recorder {
+func newRecorder(t *testing.T, launched *time.Time) recorder.Recorder {
 	t.Helper()
-	launch := func(ctx context.Context, dir string) (recorder.Session, error) {
+	launch := func(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
 		s, err := browser.Launcher{}.Launch(ctx, browser.Options{
-			BaseURL:          baseURL,
-			StorageStatePath: storageStatePath(t),
-			VideoDir:         dir,
+			BaseURL:          o.BaseURL,
+			StorageStatePath: o.StorageState,
+			VideoDir:         o.VideoDir,
 			Visuals:          true,
 		})
 		if err != nil {
@@ -60,7 +60,7 @@ func newRecorder(t *testing.T, baseURL string, launched *time.Time) recorder.Rec
 		}
 		return s, nil
 	}
-	return recorder.New(launch, baseURL)
+	return recorder.New(launch)
 }
 
 // brightnessThreshold separates the fixture's black page from the white flash

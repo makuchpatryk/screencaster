@@ -73,7 +73,7 @@ testdata/
   fixture-app/             static HTML app for e2e
   scripts/valid|invalid/   sample scripts for the core/script tests
 Dockerfile                 stages: dev -> build -> runtime
-Makefile                   dev-image, test, vet, lint (all run in the dev image)
+Makefile                   dev-image, test, vet, lint, e2e (all run in the dev image)
 .golangci.yml              depguard rules for the dependency rules below
 ```
 
@@ -83,11 +83,11 @@ The JSON Schema lives next to the code that embeds it: `core/script/script.schem
 
 - `cli` → `core`. `mcp` → `core`. Never the reverse, and `cli` never imports `mcp`.
 - `core` must not import SQLite or the MCP SDK.
-- `core/renderer` talks to browser, TTS and ffmpeg through small interfaces (`Browser`, `Synthesizer`, `Assembler`). Unit tests use fakes. Only the e2e test uses the real tools.
+- `core/renderer` talks to the recorder (browser), TTS and ffmpeg through small interfaces (`Recorder`, `Synthesizer`, `Assembler`). Unit tests use fakes. Only the e2e test uses the real tools.
 
 ## 4. Render pipeline
 
-`renderer.Render(ctx, Request, ProgressFn) (Result, error)` is the single code path for CLI and MCP (BR-001, FR-011). The only difference is the caller: CLI calls it directly, the MCP worker calls it after dequeueing.
+`renderer.Render(ctx, Deps, Request) ([]Output, error)` is the single code path for CLI and MCP (BR-001, FR-011). `Deps` holds the tools, the installed voices, the clock and the run-ID source; `Request.Progress` is told about each step before it runs (CLI progress on stderr). The only difference is the caller: CLI calls it directly, the MCP worker calls it after dequeueing.
 
 ```mermaid
 sequenceDiagram
@@ -111,7 +111,7 @@ sequenceDiagram
         A-->>R: tmp/<lang>.mp4
     end
     R->>FS: move all tmp mp4s -> <name>.<lang>.<ts>.mp4
-    R-->>C: Result{outputs}
+    R-->>C: []Output
 ```
 
 Rules:
@@ -120,7 +120,7 @@ Rules:
 2. **Languages run sequentially**, each from a fresh browser context (FR-004).
 3. **TTS before browser** for each language, because clip durations decide step timing (FR-003).
 4. **Abort path.** First step error cancels the context, closes the browser, deletes the job temp dir and returns a `Failure`. Nothing reaches `outputDir`. If `en` succeeded and `pl` fails, the `en` MP4 is discarded too (BR-004).
-5. **Publish last.** After all languages succeed, files are moved into `outputDir` with a single shared timestamp (FR-010, BR-006). Move is `os.Rename`. If temp and output are on different filesystems, copy to `<name>.part` in `outputDir`, then rename. Existing files are never opened for writing.
+5. **Publish last.** After all languages succeed, files are moved into `outputDir` with a single shared timestamp (FR-010, BR-006). Every target is checked for existence first. Move is `os.Rename`. If temp and output are on different filesystems, copy to `<name>.part` in `outputDir` (`O_EXCL`), then rename. Existing files are never opened for writing. If a move fails, the files already moved by this job are removed again.
 
 ## 5. Timing and synchronization model
 
@@ -138,7 +138,7 @@ t0 ─────────────────────────�
 - For each step: record `offset`, start the action, then wait until `max(actionEnd, offset + clipDuration)` if narrated, else continue at `actionEnd` (BR-003, FR-007).
 - Narration is **not** played during recording. Assembler places each clip at `adelay=<offset>ms` and mixes (FR-009.1). So audio sync does not depend on real-time playback.
 - Playwright's WebM is variable frame rate. The transcode forces constant 30 fps (`-r 30` / `fps=30` filter) so video time equals wall time and offsets stay valid.
-- Output duration is the video length (FR-009.4). The last narrated step waits for its clip, so the video always covers the audio.
+- Output duration is the video length (FR-009.4). The last narrated step waits for its clip, so the video always covers the audio. The assembler therefore mixes the clips without padding; an endless `apad` with `-shortest` never terminates in ffmpeg 5.1 (found in M3). With no narrated step, `anullsrc` is mapped directly and cut by `-shortest`.
 - Accepted drift: ±100 ms (FR-007 AC). The e2e test measures actual drift by checking an audible/visible marker step against its offset.
 
 **Lead-in (spike S1, ADR-46):** Playwright's video time 0 is about 90 ms after page creation, so a clip placed at the raw offset would play that much late. The recorder subtracts the fixed constant `recorder.LeadInCompensation` (90 ms) from every offset. No trimming.
@@ -274,7 +274,7 @@ stateDiagram-v2
 ## 12. Docker image
 
 - Base: Debian slim with Chromium system deps (installed through the playwright-go driver install step).
-- Contents: `screencaster`, `screencaster-mcp`, Playwright Node driver + Chromium, Piper binary, voices `en_US-ryan-high` and `pl_PL-darkman-medium` under `/opt/piper/voices`, `ffmpeg`/`ffprobe` (FR-016).
+- Contents: `screencaster`, `screencaster-mcp`, Playwright Node driver + Chromium, Piper binary (`/opt/piper/piper`, release 2023.11.14-2, libs and espeak-ng data next to it), voices `en_US-ryan-high` and `pl_PL-darkman-medium` under `/opt/piper/voices`, `ffmpeg`/`ffprobe` (FR-016). Piper and the voices are sha256-pinned.
 - Voice discovery scans `/opt/piper/voices` and `/work/voices`. The language code is the voice name up to the first `_` (FR-018).
 - Network: `--add-host=host.docker.internal:host-gateway` makes `baseUrl` reach the host app on Linux (Decision 27).
 - **Stdio hygiene.** MCP uses stdout for protocol frames. All logging goes to stderr. Subprocess stdout/stderr (Piper, ffmpeg, Playwright driver) is captured and never inherited. A stray byte on stdout corrupts the session.
@@ -284,7 +284,7 @@ stateDiagram-v2
 
 | Level | Scope | Tools |
 |-------|-------|-------|
-| Unit | config, schema, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Browser`, `Synthesizer`, `Assembler` |
+| Unit | config, schema, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler` |
 | Integration | SQLite store, lock file semantics, MCP tool/prompt wiring via in-memory transport | `go test` |
 | E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | `make e2e` in the dev image, locally (Decision 54) |
 
@@ -315,7 +315,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PR
 | 46 | Recording `t0` = monotonic timestamp just before recorded page creation; no trimming; fixed compensation (90 ms, measured in the M2 spike, see §17) | Trim lead-in with `ffmpeg -ss` | User choice. Fewer moving parts. |
 | 47 | `explore_page` snapshot = ARIA snapshot plus derived, uniqueness-checked selectors | Deprecated `page.Accessibility.Snapshot`; raw DOM dump | Supported API. Guarantees the "selector works in render" AC. Needs M5 spike to confirm output format in playwright-go. |
 | 48 | Logs to stderr only, subprocess output captured | — | Required by MCP stdio. |
-| 49 | Clip duration read from the WAV header, not ffprobe | Spawn ffprobe per clip | No subprocess per clip, exact for PCM WAV. Piper emits PCM WAV. |
+| 49 | Clip duration read from the WAV header, not ffprobe | Spawn ffprobe per clip | No subprocess per clip, exact for PCM WAV. Piper emits PCM s16le WAV (confirmed in the M3 spike, see §17). |
 | 50 | Constant 30 fps forced during transcode | Pass VFR through | Keeps video time equal to wall time for `adelay` offsets. |
 | 51 | Commit `go.work` and `go.work.sum` | Ignore and generate in CI/Docker | One source of truth for CI, the image and contributors. |
 | 52 | Dev Docker image from M1; every `make` target runs in it | Host Go install | The host has only Docker; one toolchain everywhere. golangci-lint is pinned to v2.12.0, the newest release that builds on Go 1.25. |
@@ -327,7 +327,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PR
 
 1. **M2:** measure the gap between page creation and first recorded frame (ADR-46). **Done: compensation added.** Method: `t0` just before `NewPage`, `goto marker.html`, wait 1 s, click `#marker` (full-viewport white flash), then find the first dark→bright frame in the raw WebM with ffmpeg `signalstats`. Over 10 runs (dev image, playwright-go v0.6201.1) the flash frame sits **52–129 ms before** the click's offset from `t0`, mean ≈ 90 ms; 2 of 10 runs exceed 100 ms. The WebM has a 40 ms frame step, so each sample is ±40 ms. The sign is consistent: video time 0 is ~90 ms after `t0`, so clips placed at raw offsets play ~90 ms late. The mean sits just under the ADR-46 gate but the spread does not, so `recorder.LeadInCompensation = 90ms` is subtracted from every offset (clamped at 0). With it the residual is about ±40 ms. `TestRecord_leadInIsWithinTolerance` guards it; the M3 drift e2e measures audio vs flash end to end.
 2. **M2:** confirm strict-locator behavior of playwright-go for `click`/`hover`/`fill` and that ambiguous selectors fail with a usable message. **Done: passes.** Locators are strict by default. A selector matching 2 elements fails in ~10 ms for click, hover, fill and the cursor glide, with `strict mode violation: locator('a') resolved to 2 elements:` plus the candidates. The executor uses this directly, with no `Count()` pre-check. Guarded by `TestBrowser_ambiguousSelectorFailsFast` (e2e).
-3. **M3:** confirm Piper CLI flags and WAV format (sample rate, PCM) for ADR-49.
+3. **M3:** confirm Piper CLI flags and WAV format (sample rate, PCM) for ADR-49. **Done: passes.** `piper --model <voice>.onnx --output_file <out.wav>` with the text on stdin works for both built-in voices; no `--espeak_data` is needed because the binary finds `espeak-ng-data` next to itself. Output is PCM s16le, 22050 Hz, mono, with a plain `fmt ` (16 bytes) + `data` layout. The header duration (data bytes / byte rate, 80104 / 44100 = 1.816417 s) equals ffprobe's. Piper prints the output path on stdout (so stdout must not be inherited) and logs to stderr; a missing model aborts with exit 134 and `what(): Model file doesn't exist`. ADR-49 stands. Guarded by `TestParseWAV_durationFromHeader`.
 4. **M5:** confirm `Locator.AriaSnapshot` output in playwright-go and build the role→selector mapper (ADR-47).
 
 ## 18. PRD inconsistencies
