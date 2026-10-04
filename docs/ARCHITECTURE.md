@@ -175,6 +175,7 @@ CLI bypasses the queue (BP-003), so a CLI render and an MCP job could run togeth
 - Released on process exit by the kernel, so a crash cannot leave a stale lock.
 - Works across containers because they share the same host kernel through the bind mount.
 - `explore_page` does not take the lock.
+- **MCP startup** tries the lock without waiting before it empties `tmp/` (§11). If a CLI render holds it, the temp dirs stay; the next start removes them.
 
 ### 6.4 Shutdown
 
@@ -270,7 +271,7 @@ stateDiagram-v2
 ```
 
 - `runId` is the job UUID for MCP and a random ID for CLI. The temp dir is removed on success and on abort.
-- At MCP start, recovery also removes any `tmp/*` left by interrupted jobs.
+- At MCP start, `queue.RemoveStaleTemp` removes any `tmp/*` left by interrupted renders, but only while it holds the render lock: a CLI render running at that moment has its own `tmp/<runId>` there (§6.3).
 - Add `.screencaster/` to the project's `.gitignore` (documented in README).
 
 ## 12. Docker image

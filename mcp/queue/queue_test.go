@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"screencaster/core/failure"
+	"screencaster/core/lock"
 )
 
 // instant is the one timestamp every job gets, so only rowid can order them.
@@ -137,11 +138,7 @@ func TestRecover_marksInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tmp := filepath.Join(t.TempDir(), "tmp")
-	if err := os.MkdirAll(filepath.Join(tmp, "stale-run", "en"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Recover(ctx, tmp); err != nil {
+	if err := s.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,14 +151,50 @@ func TestRecover_marksInterrupted(t *testing.T) {
 	if j, _ := s.Get(ctx, "done"); j.Status != Succeeded || j.Error != nil {
 		t.Errorf("succeeded job touched by recovery: %+v", j)
 	}
+}
+
+// staleTemp is a state dir with a lock path and a tmp dir holding one run.
+func staleTemp(t *testing.T) (lockPath, tmp string) {
+	t.Helper()
+	dir := t.TempDir()
+	tmp = filepath.Join(dir, "tmp")
+	if err := os.MkdirAll(filepath.Join(tmp, "stale-run", "en"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "render.lock"), tmp
+}
+
+// BR-009 / ARCHITECTURE §11: leftovers of interrupted renders are removed.
+func TestRemoveStaleTemp_emptiesTmpWhenLockFree(t *testing.T) {
+	lockPath, tmp := staleTemp(t)
+	if err := RemoveStaleTemp(lockPath, tmp); err != nil {
+		t.Fatal(err)
+	}
 	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
 		t.Errorf("tmp not emptied: %v", entries)
 	}
 	if _, err := os.Stat(tmp); err != nil {
 		t.Errorf("tmp dir itself must stay: %v", err)
 	}
-	if err := s.Recover(ctx, filepath.Join(t.TempDir(), "missing")); err != nil {
-		t.Errorf("Recover with no tmp dir = %v, want nil", err)
+	if err := RemoveStaleTemp(lockPath, filepath.Join(t.TempDir(), "missing")); err != nil {
+		t.Errorf("RemoveStaleTemp with no tmp dir = %v, want nil", err)
+	}
+}
+
+// ARCHITECTURE §6.1, §6.3: a CLI render holding the lock owns its temp dir.
+func TestRemoveStaleTemp_keepsTmpWhileRenderRuns(t *testing.T) {
+	lockPath, tmp := staleTemp(t)
+	l, err := lock.TryAcquire(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+
+	if err := RemoveStaleTemp(lockPath, tmp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "stale-run", "en")); err != nil {
+		t.Errorf("running render's temp dir removed: %v", err)
 	}
 }
 

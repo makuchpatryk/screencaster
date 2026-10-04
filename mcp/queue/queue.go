@@ -15,6 +15,7 @@ import (
 	_ "modernc.org/sqlite" // database/sql driver "sqlite"
 
 	"screencaster/core/failure"
+	"screencaster/core/lock"
 )
 
 // Status is where a job is in its life (PRD §13). Nothing else compares status
@@ -119,9 +120,8 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) stamp() string { return s.now().UTC().Format(timeLayout) }
 
 // Recover implements BR-009: every queued or running job becomes failed with
-// the message "interrupted", and tmpDir is emptied of what those jobs left.
-// It runs before the server accepts calls.
-func (s *Store) Recover(ctx context.Context, tmpDir string) error {
+// the message "interrupted". It runs before the server accepts calls.
+func (s *Store) Recover(ctx context.Context) error {
 	errJSON, err := json.Marshal(failure.Interrupted())
 	if err != nil {
 		return err
@@ -132,6 +132,23 @@ func (s *Store) Recover(ctx context.Context, tmpDir string) error {
 	if err != nil {
 		return fmt.Errorf("mark interrupted jobs: %w", err)
 	}
+	return nil
+}
+
+// RemoveStaleTemp empties tmpDir of what interrupted renders left, but only
+// while it holds the render lock at lockPath: a CLI render running right now
+// owns its temp dir there too (ARCHITECTURE §6.3, §11). When the lock is held
+// nothing is removed; the next start cleans up.
+func RemoveStaleTemp(lockPath, tmpDir string) error {
+	l, err := lock.TryAcquire(lockPath)
+	if errors.Is(err, lock.ErrHeld) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = l.Release() }()
+
 	entries, err := os.ReadDir(tmpDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

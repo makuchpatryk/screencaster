@@ -71,7 +71,10 @@ func run() error {
 	}
 	defer func() { _ = store.Close() }()
 	// BR-009: before any call is accepted, interrupted jobs are reported.
-	if err := store.Recover(ctx, filepath.Join(state, tmpDir)); err != nil {
+	if err := store.Recover(ctx); err != nil {
+		return err
+	}
+	if err := queue.RemoveStaleTemp(filepath.Join(state, lockFile), filepath.Join(state, tmpDir)); err != nil {
 		return err
 	}
 
