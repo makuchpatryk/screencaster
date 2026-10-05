@@ -17,7 +17,7 @@ import (
 
 func newExplorer() explorer.Explorer {
 	return explorer.Explorer{Launch: func(ctx context.Context, o explorer.LaunchOptions) (explorer.Session, error) {
-		s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageStatePath: o.StorageState})
+		s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
 		if err != nil {
 			return nil, err
 		}
@@ -45,7 +45,7 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 
 	out, err := newExplorer().Explore(context.Background(), explorer.Input{
 		BaseURL:      base + "/projects.html",
-		StorageState: filepath.Join(dir, "auth", "storageState.json"),
+		StorageState: fixtureState,
 		URL:          base + "/projects.html",
 		Actions:      []script.Step{{Action: "click", Selector: `role=button[name="New project"]`}},
 	})
@@ -62,7 +62,7 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 	name := selectorFor(t, out.Snapshot, "textbox", "Name")
 	create := selectorFor(t, out.Snapshot, "button", "Create")
 
-	body := "name: explored\nbaseUrl: " + base + "\nstorageState: auth/storageState.json\nsteps:\n" +
+	body := "name: explored\nbaseUrl: " + base + "\n" + stateYAML + "\nsteps:\n" +
 		"  - {action: goto, url: /projects.html}\n" +
 		"  - {action: click, selector: '" + newProject + "'}\n" +
 		"  - {action: fill, selector: '" + name + "', value: Demo}\n" +
@@ -83,11 +83,10 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 // the repeated one needs nth.
 func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
 	base := fixtureApp(t)
-	dir := project(t, base)
 	ex := newExplorer()
 	in := explorer.Input{
 		BaseURL:      base + "/names.html",
-		StorageState: filepath.Join(dir, "auth", "storageState.json"),
+		StorageState: fixtureState,
 		URL:          base + "/names.html",
 	}
 	out, err := ex.Explore(context.Background(), in)
@@ -116,11 +115,9 @@ func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
 // FR-017 edge case: a failing action names its step and still returns the page.
 func TestExplore_failedActionKeepsSnapshot(t *testing.T) {
 	base := fixtureApp(t)
-	dir := project(t, base)
-
 	out, err := newExplorer().Explore(context.Background(), explorer.Input{
 		BaseURL:      base + "/projects.html",
-		StorageState: filepath.Join(dir, "auth", "storageState.json"),
+		StorageState: fixtureState,
 		URL:          base + "/projects.html",
 		Actions:      []script.Step{{Action: "click", Selector: "#does-not-exist"}},
 	})

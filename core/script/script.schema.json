@@ -16,9 +16,8 @@
       "minLength": 1
     },
     "storageState": {
-      "description": "Playwright storageState JSON, relative to the working directory and inside it. Omit for a fresh, logged-out session.",
-      "type": "string",
-      "minLength": 1
+      "description": "Session the browser starts with, in the shape of Playwright's context.storageState(): cookies and localStorage. Omit for a fresh, logged-out session. It holds secrets: keep the script out of git.",
+      "$ref": "#/$defs/storageState"
     },
     "outputDir": {
       "description": "Where MP4s are written, relative to the working directory and inside it. Default output.",
@@ -54,6 +53,51 @@
     }
   },
   "$defs": {
+    "storageState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cookies": { "type": "array", "items": { "$ref": "#/$defs/cookie" } },
+        "origins": { "type": "array", "items": { "$ref": "#/$defs/origin" } }
+      }
+    },
+    "cookie": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "anyOf": [{ "required": ["url"] }, { "required": ["domain", "path"] }],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "string" },
+        "url": { "description": "Alternative to domain and path", "type": "string", "minLength": 1 },
+        "domain": { "description": "Prefix with a dot to cover subdomains", "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "expires": { "description": "Unix time in seconds; -1 for a session cookie", "type": "number" },
+        "httpOnly": { "type": "boolean" },
+        "secure": { "type": "boolean" },
+        "sameSite": { "enum": ["Strict", "Lax", "None"] }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": { "type": "string", "minLength": 1 },
+        "localStorage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "value": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "lang": {
       "description": "Lowercase ISO 639-1 language code",
       "type": "string",

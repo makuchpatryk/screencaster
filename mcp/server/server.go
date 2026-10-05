@@ -170,9 +170,9 @@ func (h handlers) renderStatus(ctx context.Context, _ *mcp.CallToolRequest, in s
 // ---- explore_page ----
 
 type exploreIn struct {
-	URL          string        `json:"url" jsonschema:"absolute http(s) URL of the page to open"`
-	StorageState string        `json:"storageState,omitempty" jsonschema:"Playwright storageState JSON relative to the project directory and inside it; omit for a logged-out session"`
-	Actions      []script.Step `json:"actions,omitempty" jsonschema:"script steps to replay before the snapshot (narration is ignored)"`
+	URL          string               `json:"url" jsonschema:"absolute http(s) URL of the page to open"`
+	StorageState *script.StorageState `json:"storageState,omitempty" jsonschema:"Playwright storage state (cookies, localStorage) to start logged in, same shape as the script's storageState; omit for a logged-out session"`
+	Actions      []script.Step        `json:"actions,omitempty" jsonschema:"script steps to replay before the snapshot (narration is ignored)"`
 }
 
 type exploreOut struct {
@@ -189,17 +189,10 @@ func (h handlers) explorePage(ctx context.Context, _ *mcp.CallToolRequest, in ex
 	if !script.AbsoluteHTTP(in.URL) {
 		return nil, exploreOut{}, fmt.Errorf("url must be an absolute http or https URL: %s", in.URL)
 	}
-	var storageState string
-	if in.StorageState != "" {
-		var err error
-		if storageState, err = renderer.StorageStatePath(h.WorkDir, in.StorageState); err != nil {
-			return nil, exploreOut{}, err
-		}
-	}
 	// The url is also the base, so a relative goto in actions resolves against
 	// the page being explored (BR-010, decision 59).
 	out, err := h.Explorer.Explore(ctx, explorer.Input{
-		BaseURL: in.URL, StorageState: storageState, URL: in.URL, Actions: in.Actions,
+		BaseURL: in.URL, StorageState: in.StorageState, URL: in.URL, Actions: in.Actions,
 	})
 	var f *failure.Failure
 	if errors.As(err, &f) {

@@ -6,6 +6,7 @@ package browser
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	playwright "github.com/mxschmitt/playwright-go"
 
 	"screencaster/core/executor"
+	"screencaster/core/script"
 )
 
 // Fixed viewport and video size (FR-004, NFR-002).
@@ -33,10 +35,10 @@ type Launcher struct{ DriverDir string }
 
 // Options configure one session. Zero values mean off.
 type Options struct {
-	BaseURL          string
-	StorageStatePath string
-	VideoDir         string // record a video of the page into this directory
-	Visuals          bool   // inject the cursor overlay (FR-006)
+	BaseURL      string
+	StorageState *script.StorageState // nil: fresh, logged-out session
+	VideoDir     string               // record a video of the page into this directory
+	Visuals      bool                 // inject the cursor overlay (FR-006)
 }
 
 // Session is one Chromium with a single context and page. It implements
@@ -96,8 +98,10 @@ func (s *Session) open(o Options) error {
 	if o.BaseURL != "" {
 		opts.BaseURL = playwright.String(o.BaseURL)
 	}
-	if o.StorageStatePath != "" {
-		opts.StorageStatePath = playwright.String(o.StorageStatePath)
+	if o.StorageState != nil {
+		if opts.StorageState, err = playwrightState(o.StorageState); err != nil {
+			return err
+		}
 	}
 	if o.VideoDir != "" {
 		opts.RecordVideo = &playwright.RecordVideo{Dir: playwright.String(o.VideoDir), Size: size}
@@ -118,6 +122,20 @@ func (s *Session) open(o Options) error {
 		}
 	}
 	return nil
+}
+
+// playwrightState converts the script's storage state. Both types carry
+// Playwright's JSON tags, so a round trip maps every field.
+func playwrightState(st *script.StorageState) (*playwright.OptionalStorageState, error) {
+	data, err := json.Marshal(st)
+	if err != nil {
+		return nil, fmt.Errorf("encode storageState: %w", err)
+	}
+	var out playwright.OptionalStorageState
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode storageState: %w", err)
+	}
+	return &out, nil
 }
 
 // Start opens the page. When VideoDir is set, recording begins here.

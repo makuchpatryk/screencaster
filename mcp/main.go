@@ -116,10 +116,10 @@ func run() error {
 func renderJob(wd string, discover func() (voices.Installed, error)) func(context.Context, queue.Job) ([]queue.Output, error) {
 	launch := func(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
 		s, err := browser.Launcher{}.Launch(ctx, browser.Options{
-			BaseURL:          o.BaseURL,
-			StorageStatePath: o.StorageState,
-			VideoDir:         o.VideoDir,
-			Visuals:          true,
+			BaseURL:      o.BaseURL,
+			StorageState: o.StorageState,
+			VideoDir:     o.VideoDir,
+			Visuals:      true,
 		})
 		if err != nil {
 			return nil, err
@@ -164,7 +164,7 @@ func acquireLock(path string) func(context.Context) (func(), error) {
 
 // launchExplorer opens a plain, unrecorded session (FR-017).
 func launchExplorer(ctx context.Context, o explorer.LaunchOptions) (explorer.Session, error) {
-	s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageStatePath: o.StorageState})
+	s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
 	if err != nil {
 		return nil, err
 	}

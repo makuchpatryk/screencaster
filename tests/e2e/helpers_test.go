@@ -16,6 +16,7 @@ import (
 
 	"screencaster/core/browser"
 	"screencaster/core/recorder"
+	"screencaster/core/script"
 )
 
 // fixtureApp serves testdata/fixture-app and returns its base URL
@@ -31,14 +32,13 @@ func fixtureApp(t *testing.T) string {
 	return srv.URL
 }
 
-func storageStatePath(t *testing.T) string {
-	t.Helper()
-	p, err := filepath.Abs("../../testdata/storageState.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
+// The fixture's login: the cookie that makes #logged-in visible. fixtureState
+// and stateYAML are the same session as a Go value and as a script line.
+var fixtureState = &script.StorageState{Cookies: []script.Cookie{
+	{Name: "sc_session", Value: "fixture", Domain: "127.0.0.1", Path: "/"},
+}}
+
+const stateYAML = "storageState: {cookies: [{name: sc_session, value: fixture, domain: 127.0.0.1, path: /}]}"
 
 // newRecorder wires a real recorder like main does. launched, when not nil,
 // receives the time the browser was ready, so tests can time the steps without
@@ -47,10 +47,10 @@ func newRecorder(t *testing.T, launched *time.Time) recorder.Recorder {
 	t.Helper()
 	launch := func(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
 		s, err := browser.Launcher{}.Launch(ctx, browser.Options{
-			BaseURL:          o.BaseURL,
-			StorageStatePath: o.StorageState,
-			VideoDir:         o.VideoDir,
-			Visuals:          true,
+			BaseURL:      o.BaseURL,
+			StorageState: o.StorageState,
+			VideoDir:     o.VideoDir,
+			Visuals:      true,
 		})
 		if err != nil {
 			return nil, err

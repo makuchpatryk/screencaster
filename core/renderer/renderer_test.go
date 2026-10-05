@@ -48,8 +48,7 @@ var stock = voices.Installed{
 	"pl_PL-darkman-medium": "/v/pl_PL-darkman-medium.onnx",
 }
 
-// workDir builds a project: a storageState file and demos/demo.yaml (when
-// script != "").
+// workDir builds a project holding demos/demo.yaml (when script != "").
 func workDir(t *testing.T, script string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -63,7 +62,6 @@ func workDir(t *testing.T, script string) string {
 			t.Fatal(err)
 		}
 	}
-	write("auth/storageState.json", "{}")
 	if script != "" {
 		write("demos/demo.yaml", script)
 	}
@@ -208,44 +206,30 @@ func TestPrepare_storageStateOptional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare() error = %v, want none: a public site needs no storageState", err)
 	}
-	if plan.StorageState != "" {
-		t.Errorf("StorageState = %q, want empty", plan.StorageState)
+	if plan.Script.StorageState != nil {
+		t.Errorf("StorageState = %+v, want nil", plan.Script.StorageState)
 	}
 }
 
-func TestPrepare_storageStateResolvesAgainstWorkDir(t *testing.T) {
-	dir := workDir(t, withTarget("storageState: auth/storageState.json\n"))
+func TestPrepare_storageStateIsInline(t *testing.T) {
+	dir := workDir(t, withTarget("storageState:\n  cookies:\n    - {name: session, value: abc, url: http://host.docker.internal:3000}\n"))
 	plan, err := Prepare(Request{WorkDir: dir, ScriptPath: "demos/demo.yaml"}, stock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(dir, "auth/storageState.json"); plan.StorageState != want {
-		t.Errorf("StorageState = %q, want %q", plan.StorageState, want)
+	st := plan.Script.StorageState
+	if st == nil || len(st.Cookies) != 1 || st.Cookies[0].Name != "session" {
+		t.Errorf("StorageState = %+v, want the inline session cookie", st)
 	}
 }
 
-func TestPrepare_storageStateMissingIsValidationError(t *testing.T) {
-	dir := workDir(t, withTarget("storageState: auth/nope.json\n"))
-	// A voice problem too: both must come back in one list (fail early, all at once).
-	_, err := Prepare(Request{WorkDir: dir, ScriptPath: "demos/demo.yaml"}, voices.Installed{})
-	var ve failure.ValidationErrors
-	if !errors.As(err, &ve) {
-		t.Fatalf("Prepare() error = %v, want ValidationErrors", err)
-	}
-	want := failure.ValidationErrors{
-		{Message: "voice not installed: en_US-ryan-high"},
-		{Pointer: "/storageState", Message: "storageState not found: " + filepath.Join(dir, "auth/nope.json")},
-	}
-	if !reflect.DeepEqual(ve, want) {
-		t.Errorf("errors = %v, want %v", ve, want)
-	}
-}
-
-func TestPrepare_storageStateMustBeAFile(t *testing.T) {
-	dir := workDir(t, withTarget("storageState: auth\n"))
+// A path string, the old form, is rejected next to the other problems.
+func TestPrepare_storageStatePathIsValidationError(t *testing.T) {
+	dir := workDir(t, withTarget("storageState: auth/storageState.json\n"))
 	_, err := Prepare(Request{WorkDir: dir, ScriptPath: "demos/demo.yaml"}, stock)
-	if err == nil || !strings.Contains(err.Error(), "/storageState: storageState not found: ") {
-		t.Errorf("Prepare() error = %v, want storageState not found for a directory", err)
+	var ve failure.ValidationErrors
+	if !errors.As(err, &ve) || len(ve) == 0 || ve[0].Pointer != "/storageState" {
+		t.Errorf("Prepare() error = %v, want a validation error at /storageState", err)
 	}
 }
 
@@ -310,8 +294,6 @@ func TestPrepare_pathsOutsideWorkDirAreValidationErrors(t *testing.T) {
 		{"outputDir parent", "outputDir: ../out\n", "/outputDir", "../out"},
 		{"outputDir deep parent", "outputDir: videos/../../out\n", "/outputDir", "videos/../../out"},
 		{"outputDir absolute", "outputDir: /srv/videos\n", "/outputDir", "/srv/videos"},
-		{"storageState parent", "storageState: ../auth/s.json\n", "/storageState", "../auth/s.json"},
-		{"storageState absolute", "storageState: /etc/passwd\n", "/storageState", "/etc/passwd"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -336,7 +318,7 @@ func TestPrepare_pathsOutsideWorkDirAreValidationErrors(t *testing.T) {
 // screencaster.yaml is gone (decision 58): a stray one changes nothing.
 func TestPrepare_ignoresScreencasterYAML(t *testing.T) {
 	dir := workDir(t, enOnly)
-	stray := "baseUrl: http://elsewhere:9\nstorageState: auth/other.json\noutputDir: elsewhere\nvoices: {en: nope}\n"
+	stray := "baseUrl: http://elsewhere:9\nstorageState: {cookies: [{name: x, value: y, url: http://elsewhere:9}]}\noutputDir: elsewhere\nvoices: {en: nope}\n"
 	if err := os.WriteFile(filepath.Join(dir, "screencaster.yaml"), []byte(stray), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +326,7 @@ func TestPrepare_ignoresScreencasterYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Script.BaseURL != "http://host.docker.internal:3000" || plan.StorageState != "" ||
+	if plan.Script.BaseURL != "http://host.docker.internal:3000" || plan.Script.StorageState != nil ||
 		plan.OutputDir != filepath.Join(dir, "output") || plan.Voices["en"] != "/v/en_US-ryan-high.onnx" {
 		t.Errorf("a stray screencaster.yaml changed the plan: %+v", plan)
 	}

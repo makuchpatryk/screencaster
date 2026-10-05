@@ -1,5 +1,11 @@
 name: create-project
 baseUrl: http://host.docker.internal:3000
+storageState:                  # optional; omit for a public site
+  cookies:
+    - name: session
+      value: <session cookie value>
+      domain: host.docker.internal
+      path: /
 languages: [en, pl]
 meta:
   title: How to create a project

@@ -194,14 +194,15 @@ func TestRecord_launchGetsContextSettings(t *testing.T) { // FR-004
 	r := newRecorder(sess)
 	r.Launch = func(_ context.Context, o LaunchOptions) (Session, error) { got = o; return sess, nil }
 
+	state := &script.StorageState{Cookies: []script.Cookie{{Name: "s", Value: "v", Domain: "app.test", Path: "/"}}}
 	_, err := r.Record(context.Background(), Input{
 		Steps: []script.Step{click("#a")}, Lang: "en",
-		Dir: "/tmp/run/en", BaseURL: "http://app.test", StorageState: "/work/auth/s.json",
+		Dir: "/tmp/run/en", BaseURL: "http://app.test", StorageState: state,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := LaunchOptions{VideoDir: "/tmp/run/en", BaseURL: "http://app.test", StorageState: "/work/auth/s.json"}
+	want := LaunchOptions{VideoDir: "/tmp/run/en", BaseURL: "http://app.test", StorageState: state}
 	if got != want {
 		t.Errorf("launch options = %+v, want %+v", got, want)
 	}

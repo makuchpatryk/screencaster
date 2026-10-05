@@ -12,20 +12,22 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
 
 2. **Docker** (recommended; one image holds both binaries, Chromium, Piper, both voices and ffmpeg):
    ```bash
-   make image        # or: docker build -t screencaster .
-   docker run --rm --init --add-host=host.docker.internal:host-gateway \
-     -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml
+   docker compose build    # or: make image
+   docker compose run --rm screencaster render demos/my-demo.yaml
    ```
-   - `--init` forwards SIGTERM, so a stopped render cleans up.
-   - `--add-host` lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
+   - `compose.yaml` sets `--init` (forwards SIGTERM, so a stopped render cleans up), `--shm-size=1g`, the `host.docker.internal` host mapping and the `.:/work` mount.
+   - The host mapping lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
+   - Plain Docker works too: `docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml`.
    - The container runs as root: files in `output/` belong to root.
    - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
 
-3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. Paths are relative to the working directory (`/work` in Docker):
+3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. `outputDir` is relative to the working directory (`/work` in Docker):
    ```yaml
    name: my-demo
    baseUrl: http://host.docker.internal:3000   # required, absolute http(s) URL
-   storageState: auth/storageState.json        # optional; omit for a public site
+   storageState:                               # optional; omit for a public site
+     cookies:
+       - {name: session, value: <value>, domain: host.docker.internal, path: /}
    outputDir: output                           # optional, default output
    languages: [en, pl]
    meta:
@@ -43,7 +45,7 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
        selector: input[name="name"]
        value: My Project
    ```
-   A demo for a public site is just `name`, `baseUrl` and `steps`: no other file is needed. A `screencaster.yaml` from an earlier version is ignored (with a warning); move its fields into the demo.
+   `storageState` has the shape of Playwright's `context.storageState()` (`cookies`, `origins` with `localStorage`); paste an exported file here as it is (JSON is valid YAML). It holds live session secrets, so keep a demo that has one out of git. A demo for a public site is just `name`, `baseUrl` and `steps`: no other file is needed. A `screencaster.yaml` from an earlier version is ignored (with a warning); move its fields into the demo.
 
 4. **Render**:
    - CLI: `screencaster render demos/my-demo.yaml`
@@ -91,7 +93,6 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 
 - `demos/*.yaml` — stored demo scripts (created via chat or CLI)
 - `output/*.mp4` — rendered videos, never overwritten (BR-006, FR-010)
-- the file named by a demo's `storageState` (for example `auth/storageState.json`) — optional logged-in session state for the target app (add to `.gitignore`)
 
 ## Key constraints
 
@@ -122,7 +123,7 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 }
 ```
 
-- Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `get_render_status`, `explore_page` (takes an absolute `url` and an optional `storageState`; returns the accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
+- Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `get_render_status`, `explore_page` (takes an absolute `url` and an optional inline `storageState`; returns the accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
 - Prompt: `/mcp__screencaster__create_demo [description]` asks for languages, voices, audience, title, base URL and login (if any) in one message, explores the app, writes `demos/<name>.yaml` and renders it.
 - Jobs run one at a time, oldest first, and are kept in `.screencaster/jobs.db`. Jobs still queued or running when the server stops are marked `failed` with `interrupted` at the next start; they do not resume.
 - A CLI render and a queued job never run together: both take `.screencaster/render.lock`, and a job waits for it while still `queued`.

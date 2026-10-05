@@ -45,7 +45,7 @@ type Session interface {
 // LaunchOptions configure the fresh context of one call (FR-017).
 type LaunchOptions struct {
 	BaseURL      string
-	StorageState string
+	StorageState *script.StorageState
 }
 
 // Explorer opens a browser per call. Launch is wired in main.
@@ -56,7 +56,7 @@ type Explorer struct {
 // Input is one explore call. URL is resolved like a goto step (BR-010).
 type Input struct {
 	BaseURL      string
-	StorageState string
+	StorageState *script.StorageState
 	URL          string
 	Actions      []script.Step
 }

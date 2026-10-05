@@ -64,10 +64,10 @@ func render(ctx context.Context, req renderer.Request) ([]renderer.Output, error
 	}
 	launch := func(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
 		return browser.Launcher{}.Launch(ctx, browser.Options{
-			BaseURL:          o.BaseURL,
-			StorageStatePath: o.StorageState,
-			VideoDir:         o.VideoDir,
-			Visuals:          true,
+			BaseURL:      o.BaseURL,
+			StorageState: o.StorageState,
+			VideoDir:     o.VideoDir,
+			Visuals:      true,
 		})
 	}
 	return renderer.Render(ctx, renderer.Deps{

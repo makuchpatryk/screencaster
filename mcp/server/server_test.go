@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -59,17 +60,14 @@ type env struct {
 	launched []explorer.LaunchOptions
 }
 
-// newEnv starts the server over the in-memory transport with a project dir
-// holding a storageState file. The returned inst can be changed before the first
-// call that reads voices.
+// newEnv starts the server over the in-memory transport with an empty project
+// dir. The returned inst can be changed before the first call that reads voices.
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	e := &env{work: t.TempDir(), inst: voices.Installed{
 		"en_US-ryan-high":      "/v/en",
 		"pl_PL-darkman-medium": "/v/pl",
 	}}
-	e.writeFile("auth/state.json", "{}")
-
 	var err error
 	e.store, err = queue.Open(filepath.Join(e.work, ".screencaster", "jobs.db"), time.Now)
 	if err != nil {
@@ -249,21 +247,20 @@ func TestRenderVideo_scriptOutsideWorkDirIsRefused(t *testing.T) {
 	}
 }
 
-// Decision 58: the work dir holds the demo and nothing else, and the
-// storageState check runs at submit time with no job row on failure.
+// Decision 58: the work dir holds the demo and nothing else, and a bad
+// storageState is refused at submit time with no job row.
 func TestRenderVideo_needsNoProjectConfig(t *testing.T) {
 	e := newEnv(t)
 	e.writeFile("demos/ok.yaml", validScript)
-	e.writeFile("demos/login.yaml", strings.Replace(validScript, "steps:", "storageState: auth/gone.json\nsteps:", 1))
+	e.writeFile("demos/login.yaml", strings.Replace(validScript, "steps:", "storageState: auth/gone.json\nsteps:", 1)) // the old path form
 
 	out := decode[renderOut](t, e.call(t, "render_video", map[string]any{"script": "demos/ok.yaml"}))
 	if out.Position != 1 {
 		t.Errorf("render without screencaster.yaml = %+v, want queued at 1", out)
 	}
 	res := e.call(t, "render_video", map[string]any{"script": "demos/login.yaml"})
-	want := "/storageState: storageState not found: " + filepath.Join(e.work, "auth/gone.json")
-	if !res.IsError || text(res) != want {
-		t.Errorf("missing storageState: %v %q, want %q", res.IsError, text(res), want)
+	if !res.IsError || !strings.HasPrefix(text(res), "/storageState: ") {
+		t.Errorf("path storageState: %v %q, want a validation error at /storageState", res.IsError, text(res))
 	}
 }
 
@@ -457,40 +454,26 @@ func TestExplorePage_relativeURLIsToolError(t *testing.T) {
 
 func TestExplorePage_storageState(t *testing.T) {
 	e := newEnv(t)
+	state := map[string]any{"cookies": []map[string]any{{"name": "session", "value": "abc", "domain": "app", "path": "/"}}}
 	tests := []struct {
-		name         string
-		storageState string
-		wantErr      string
-		wantLaunched string
+		name string
+		args map[string]any
+		want *script.StorageState
 	}{
-		{"omitted means a logged-out session", "", "", ""},
-		{"resolved against the project dir", "auth/state.json", "", filepath.Join(e.work, "auth/state.json")},
-		{"missing file", "auth/gone.json", "storageState not found: " + filepath.Join(e.work, "auth/gone.json"), ""},
-		{"parent dir is refused", "../auth/state.json", "storageState must stay inside the working directory: ../auth/state.json", ""},
-		{"absolute path elsewhere is refused", "/etc/passwd", "storageState must stay inside the working directory: /etc/passwd", ""},
+		{"omitted means a logged-out session", map[string]any{}, nil},
+		{"inline state reaches the browser", map[string]any{"storageState": state},
+			&script.StorageState{Cookies: []script.Cookie{{Name: "session", Value: "abc", Domain: "app", Path: "/"}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e.launched = nil
-			args := map[string]any{"url": "http://app/projects"}
-			if tt.storageState != "" {
-				args["storageState"] = tt.storageState
-			}
-			res := e.call(t, "explore_page", args)
-			if tt.wantErr != "" {
-				if !res.IsError || text(res) != tt.wantErr {
-					t.Errorf("got %v %q, want error %q", res.IsError, text(res), tt.wantErr)
-				}
-				if len(e.launched) != 0 {
-					t.Errorf("a browser was launched despite the error: %+v", e.launched)
-				}
-				return
-			}
+			tt.args["url"] = "http://app/projects"
+			res := e.call(t, "explore_page", tt.args)
 			if res.IsError || len(e.launched) != 1 {
 				t.Fatalf("got %v %q, launched %+v", res.IsError, text(res), e.launched)
 			}
-			if got := e.launched[0].StorageState; got != tt.wantLaunched {
-				t.Errorf("explorer StorageState = %q, want %q", got, tt.wantLaunched)
+			if got := e.launched[0].StorageState; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("explorer StorageState = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

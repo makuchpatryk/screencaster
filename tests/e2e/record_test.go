@@ -182,5 +182,5 @@ func TestRecord_leadInIsWithinTolerance(t *testing.T) {
 
 func recordInput(t *testing.T, base, lang string, steps []script.Step) recorder.Input {
 	t.Helper()
-	return recorder.Input{Steps: steps, Lang: lang, Dir: t.TempDir(), BaseURL: base, StorageState: storageStatePath(t)}
+	return recorder.Input{Steps: steps, Lang: lang, Dir: t.TempDir(), BaseURL: base, StorageState: fixtureState}
 }

@@ -78,7 +78,7 @@ N/A — confirmed by user. The MVP is an internal tool. A future commercial vers
 - **Exceptions:** None.
 
 ### BR-010: Self-contained demo file
-- **Rule:** A demo is one self-contained YAML file. Its steps must use URL paths relative to the script's own `baseUrl`. Authentication must come only from the Playwright storageState file named by the script's optional `storageState`. Scripts must not contain login steps. Retargeting a demo at another environment means editing its `baseUrl`.
+- **Rule:** A demo is one self-contained YAML file. Its steps must use URL paths relative to the script's own `baseUrl`. Authentication must come only from the Playwright storage state in the script's optional inline `storageState`. Scripts must not contain login steps. Retargeting a demo at another environment means editing its `baseUrl`.
 - **Applies to:** Scripts.
 - **Exceptions:** A `goto` step with an absolute URL (`http://` or `https://`) is used as-is.
 
@@ -185,7 +185,7 @@ None identified by user.
 1. Claude Code calls `explore_page({ "url": "http://host.docker.internal:3000/projects" })`, plus `storageState` when the app needs a login.
 2. Server returns the page title and an accessibility snapshot with a ready-to-use selector for each interactive element.
 3. For pages deeper in a flow, Claude Code calls it again with `actions` that reach them (e.g. click "New project") and receives the snapshot of the resulting page.
-- **Error states:** An action fails or times out → tool error naming the step, plus the snapshot of the page at that moment. A relative `url` → tool error naming the rule. `storageState` file missing → tool error `storageState not found: <path>`.
+- **Error states:** An action fails or times out → tool error naming the step, plus the snapshot of the page at that moment. A relative `url` → tool error naming the rule.
 - **Empty states:** Page with no accessible elements → empty snapshot, no error.
 
 ### UF-004: Guided creation
@@ -195,7 +195,7 @@ None identified by user.
    - voice for each selected language (installed voices),
    - audience (release notes / sales / marketing),
    - title (proposed from the description),
-   - the app's base URL and, if it needs a login, the storageState path.
+   - the app's base URL and, if it needs a login, the storage state (cookies and localStorage).
 3. Developer answers, or replies "defaults" to accept all.
 4. Claude Code explores the app, writes the script, renders, and reports the MP4 path(s).
 - **Error states:** No voice installed for a requested language → Claude Code reports it and offers the languages that have voices.
@@ -208,10 +208,10 @@ None identified by user.
 - **Description:** The system must read the target app, the login and the output location from the demo script itself. There is no project-level config file; a `screencaster.yaml` is never read.
 - **Inputs / validation:** Top-level script fields:
   - `baseUrl` (string, required, absolute http/https URL; e.g. `http://host.docker.internal:3000`)
-  - `storageState` (string, optional, path relative to the working dir and inside it; omit for a fresh, logged-out session; when given, the file must exist)
+  - `storageState` (object, optional; Playwright's storage state: `cookies` and `origins` with `localStorage`, defined in the schema; omit for a fresh, logged-out session; it holds secrets, so the script stays out of git)
   - `outputDir` (string, optional, relative to the working dir and inside it, default `output`)
   - `voices` (object, optional; keys are language codes, values are Piper voice names; built-in defaults: `en` → `en_US-ryan-high`, `pl` → `pl_PL-darkman-medium`)
-- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A missing storageState file → `/storageState: storageState not found: /work/auth/s.json`, reported together with the script and voice errors. A `storageState` or `outputDir` that resolves outside the working dir (`..` or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>` (same for `/storageState`), because the script is written by an LLM. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
+- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A `storageState` that is not an object of that shape (a path string, a cookie with neither `url` nor `domain` and `path`) → a schema validation error at `/storageState...`, reported together with the script and voice errors. An `outputDir` that resolves outside the working dir (`..` or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>`, because the script is written by an LLM. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
 - **Acceptance criteria:**
   - Given a script without `baseUrl`, when any render starts, then it fails schema validation (`/baseUrl`) before launching a browser.
   - Given a script without `voices`, when rendering `en`, then the audio uses `en_US-ryan-high`; when rendering `pl`, then it uses `pl_PL-darkman-medium`.
@@ -222,7 +222,7 @@ None identified by user.
 - **Description:** The system must parse the YAML script and validate it against a JSON Schema file (`core/script/script.schema.json`, embedded with `go:embed` in `core/script` and so compiled into both binaries) using `santhosh-tekuri/jsonschema`, before any browser or TTS work.
 - **Inputs / validation:**
   - `name` (string, required, `^[a-z0-9-]{1,64}$`; used in output filenames)
-  - `baseUrl` (string, required), `storageState` (string, optional), `outputDir` (string, optional): see FR-001
+  - `baseUrl` (string, required), `storageState` (object, optional), `outputDir` (string, optional): see FR-001
   - `languages` (array, optional, lowercase ISO 639-1 codes such as `en`, `pl`, `de`; default `["en"]`; overridable per render, BR-002)
   - `voices` (object, optional, keys are language codes, values Piper voice names; installed check per BR-011)
   - `meta` (object, optional: `title` ≤ 120 chars, `description` ≤ 500 chars, `audience` one of `release-notes | sales | marketing`)
@@ -257,7 +257,7 @@ None identified by user.
 - **Description:** For each selected language, the system must launch Chromium via playwright-go with a new context using:
   - viewport 1920×1080
   - `recordVideo` with size 1920×1080
-  - `storageState` from the script (omitted: no stored session)
+  - `storageState` from the script, passed inline (omitted: no stored session)
   - `baseURL` from the script's `baseUrl`
 
   Each selected language is a separate recording, run sequentially in the order of `languages` (EN first by default), because narration lengths differ.
@@ -379,12 +379,12 @@ None identified by user.
 ### FR-017: MCP tool `explore_page`
 - **Implements:** BP-001, BR-010
 - **Description:** The `screencaster-mcp` server must expose `explore_page` so Claude Code can discover real selectors before writing a script.
-  - **Input:** `{ "url": string, "storageState"?: string, "actions"?: Step[] }`. `url` must be an absolute http(s) URL; the caller passes the demo's `baseUrl` joined with the path. `storageState` is a path relative to the working dir and inside it. `actions` use the script step schema without `narration` (FR-002). The `url` is also the base for relative `goto` URLs inside `actions` (BR-010).
+  - **Input:** `{ "url": string, "storageState"?: object, "actions"?: Step[] }`. `url` must be an absolute http(s) URL; the caller passes the demo's `baseUrl` joined with the path. `storageState` has the same inline shape as the script's. `actions` use the script step schema without `narration` (FR-002). The `url` is also the base for relative `goto` URLs inside `actions` (BR-010).
   - **Behavior:** Launches a fresh, non-recorded Chromium context (1920×1080, the given storageState or none), navigates to `url`, runs `actions` in order with the FR-005 semantics and the 30 s timeout (no cursor animation, no typing delay), closes the browser, and returns the final page state.
   - **Output:** `{ url, title, snapshot, truncated }`. `snapshot` is the page's accessibility tree as indented text. Each interactive element line includes its role, accessible name and a ready-to-use Playwright selector (e.g. `role=button[name="New project"]`). Capped at 50 000 characters (`truncated: true` if cut).
   - **Stateless:** Every call starts from a fresh context. To inspect a page deeper in a flow, the caller passes the `actions` that reach it.
   - **Independence:** Runs immediately, outside the render queue. Concurrent explore calls run one at a time.
-- **Edge cases:** A relative `url` → tool error `url must be an absolute http or https URL: <url>`. A missing storageState file → tool error `storageState not found: <path>`. A `storageState` outside the working dir → tool error `storageState must stay inside the working directory: <value>`. An action fails or times out → tool error with step index, action, target and message (as FR-008), plus the snapshot of the page at the failure. A page with no accessible elements → empty snapshot, no error.
+- **Edge cases:** A relative `url` → tool error `url must be an absolute http or https URL: <url>`. An action fails or times out → tool error with step index, action, target and message (as FR-008), plus the snapshot of the page at the failure. A page with no accessible elements → empty snapshot, no error.
 - **Acceptance criteria:**
   - Given the fixture app with a "New project" button, when `explore_page` is called with the fixture's absolute `/projects` URL, then the snapshot contains `role=button[name="New project"]`.
   - Given `actions` that click a missing selector, when called, then a tool error names that step and includes the snapshot.
@@ -436,7 +436,7 @@ None identified by user.
 | error_json | TEXT | no | JSON `{step,lang,action,target,message}` | set on failure; `interrupted` uses `{message:"interrupted"}` |
 
 ### Files (no DB)
-- `demos/*.yaml` (scripts, each with its own target settings), the optional storageState JSON a script names, `<outputDir>/*.mp4`.
+- `demos/*.yaml` (scripts, each with its own target settings), `<outputDir>/*.mp4`.
 - **Relations:** One job → zero or more MP4 files (one per selected language).
 - **Retention / deletion:** Forever; manual deletion only (BR-007).
 
@@ -587,6 +587,7 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 58 | Each demo is one self-contained YAML. `baseUrl` is required, `storageState` and `outputDir` are optional, and `screencaster.yaml` is removed (a warning is shown if one is present). Supersedes 15 | Optional `screencaster.yaml` fallback; paths relative to the demo file | User choice. No hidden project state; a public-site demo is one file and one command. Retargeting an environment means editing `baseUrl` (BR-010). |
 | 59 | `explore_page` takes an absolute `url` plus an optional `storageState`. The url is also the base for relative gotos in `actions` | Relative path plus a config `baseUrl` | User choice. No config to read; the explorer needs no change. |
 | 60 | No project-level voice defaults. Voice resolution is script, then built-in | Keep config `voices`; env-var defaults | Follows from 58. The script already carries per-demo `voices`, so a project level only added a second source. |
+| 61 | `storageState` is an inline object in the script (and in `explore_page`), not a path to a file. Supersedes the file form of 15, 58 and 59 | Path to a Playwright JSON file | User choice. A demo is then truly one self-contained file, with no second file to mount, check or leak a path from. The schema defines the shape; secrets now live in the demo, so it stays out of git. |
 
 ## 21. Open Questions
 None.
@@ -597,5 +598,5 @@ None.
 | Script | YAML file in `demos/` describing steps and narration for one demo. Sets `languages` (default `["en"]`) and other metadata. |
 | Step | One action plus optional `narration` (keyed by language code: `en`, `pl`, etc.). Narration text is required for every selected language. |
 | Job | One queued/running/completed render of a script, producing one MP4 per selected language. (Not limited to EN and PL; any language with an installed voice is rendered.) |
-| storageState | Playwright JSON file with cookies/localStorage used to start a logged-in session. Named by the demo script (optional). |
+| storageState | Playwright storage state (cookies/localStorage) used to start a logged-in session. Written inline in the demo script (optional). |
 | Piper | Local open-source neural TTS engine. Voices and languages are pluggable via `/work/voices/*.onnx` files. |

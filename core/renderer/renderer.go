@@ -84,16 +84,15 @@ type Output struct {
 // Plan is everything the pipeline needs after validation, so later stages
 // never go back to the script file or the voice directories.
 type Plan struct {
-	Script       script.Script
-	Languages    []string
-	Voices       map[string]string // language -> .onnx path
-	StorageState string            // absolute path of an existing file, or empty
-	OutputDir    string            // absolute
+	Script    script.Script
+	Languages []string
+	Voices    map[string]string // language -> .onnx path
+	OutputDir string            // absolute
 }
 
-// Prepare validates script, narration, voices and storageState without
+// Prepare validates script, narration, voices and output directory without
 // starting any browser, TTS or ffmpeg work (FR-001, FR-002, BR-011). Problems
-// with the script, voices and storageState come back together as
+// with the script, voices and output directory come back together as
 // failure.ValidationErrors.
 func Prepare(req Request, installed voices.Installed) (Plan, error) {
 	path := resolve(req.WorkDir, req.ScriptPath)
@@ -115,16 +114,8 @@ func Prepare(req Request, installed voices.Installed) (Plan, error) {
 	paths, voiceErrs := voices.Resolve(langs, s.Voices, installed)
 	errs = append(errs, voiceErrs...)
 
-	// The script is written by an LLM, so the paths it names must stay inside
-	// the working directory (the mounted project).
-	var storageState string
-	if s.StorageState != "" {
-		var err error
-		if storageState, err = StorageStatePath(req.WorkDir, s.StorageState); err != nil {
-			errs = append(errs, failure.ValidationError{Pointer: "/storageState", Message: err.Error()})
-		}
-	}
-
+	// The script is written by an LLM, so the output path it names must stay
+	// inside the working directory (the mounted project).
 	outputDir := cmp.Or(s.OutputDir, defaultOutputDir)
 	outputDir, ok := within(req.WorkDir, outputDir)
 	if !ok {
@@ -135,11 +126,10 @@ func Prepare(req Request, installed voices.Installed) (Plan, error) {
 	}
 
 	return Plan{
-		Script:       s,
-		Languages:    langs,
-		Voices:       paths,
-		StorageState: storageState,
-		OutputDir:    outputDir,
+		Script:    s,
+		Languages: langs,
+		Voices:    paths,
+		OutputDir: outputDir,
 	}, nil
 }
 
@@ -174,21 +164,6 @@ func ScriptPath(workDir, p string) (string, error) {
 	abs, ok := within(workDir, p)
 	if !ok {
 		return "", errors.New(outsideWorkDir("script", p))
-	}
-	return abs, nil
-}
-
-// StorageStatePath resolves a storageState path against workDir and checks it
-// is an existing file inside workDir. It is the one rule for the script's
-// storageState (Prepare) and explore_page's input, which are both LLM-written.
-// The error texts are specified by the PRD (FR-001, FR-017).
-func StorageStatePath(workDir, p string) (string, error) {
-	abs, ok := within(workDir, p)
-	if !ok {
-		return "", errors.New(outsideWorkDir("storageState", p))
-	}
-	if info, err := os.Stat(abs); err != nil || info.IsDir() {
-		return "", errors.New("storageState not found: " + abs)
 	}
 	return abs, nil
 }
@@ -261,7 +236,7 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, pr
 		Lang:         lang,
 		Dir:          videoDir,
 		BaseURL:      plan.Script.BaseURL,
-		StorageState: plan.StorageState,
+		StorageState: plan.Script.StorageState,
 	}
 	if progress != nil {
 		in.OnStep = func(i int) { progress(lang, i+1, len(steps), steps[i].Action, executor.Target(steps[i])) }

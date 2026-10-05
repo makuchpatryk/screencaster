@@ -24,13 +24,13 @@ import (
 // plosive so the speech onset is sharp.
 const markerText = "Bang. This is the marker."
 
-// renderScript is a format template: %s is the fixture's base URL. It covers
+// renderScript is a format template: the first %s is the fixture's base URL, the second its storageState line. It covers
 // every action, two narrated steps on the way and the
 // narrated marker step: press Enter on #marker flashes the viewport white.
 // press has no cursor glide, so the flash starts right at the step offset.
 const renderScript = `name: e2e-demo
 baseUrl: %s
-storageState: auth/storageState.json
+%s
 meta:
   title: E2E demo
   description: Every action plus the drift marker.
@@ -82,10 +82,10 @@ steps:
     ms: 1500
 `
 
-// failingScript is a format template too: %s is the fixture's base URL.
+// failingScript is a format template too, with the same two arguments.
 const failingScript = `name: e2e-fail
 baseUrl: %s
-storageState: auth/storageState.json
+%s
 steps:
   - action: goto
     url: /index.html
@@ -115,19 +115,13 @@ func cliBinary(t *testing.T) string {
 	return bin
 }
 
-// project builds a work dir like a user's repo: the storageState and the
-// scripts under demos/. Each script carries its own baseUrl (decision 58).
+// project builds a work dir like a user's repo: the scripts under demos/. Each script carries its own baseUrl (decision 58).
 func project(t *testing.T, baseURL string) string {
 	t.Helper()
 	dir := t.TempDir()
-	state, err := os.ReadFile(storageStatePath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
 	files := map[string]string{
-		"auth/storageState.json": string(state),
-		"demos/e2e-demo.yaml":    fmt.Sprintf(renderScript, baseURL),
-		"demos/e2e-fail.yaml":    fmt.Sprintf(failingScript, baseURL),
+		"demos/e2e-demo.yaml": fmt.Sprintf(renderScript, baseURL, stateYAML),
+		"demos/e2e-fail.yaml": fmt.Sprintf(failingScript, baseURL, stateYAML),
 	}
 	for rel, content := range files {
 		p := filepath.Join(dir, rel)

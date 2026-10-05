@@ -101,16 +101,26 @@ func TestParse_decodesTargetFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.BaseURL != "https://example.com/app" || s.StorageState != "auth/storageState.json" || s.OutputDir != "videos" {
-		t.Errorf("target fields = %q %q %q", s.BaseURL, s.StorageState, s.OutputDir)
+	if s.BaseURL != "https://example.com/app" || s.OutputDir != "videos" {
+		t.Errorf("target fields = %q %q", s.BaseURL, s.OutputDir)
+	}
+	want := &StorageState{
+		Cookies: []Cookie{
+			{Name: "session", Value: "abc123", Domain: "example.com", Path: "/", Expires: -1, HTTPOnly: true, Secure: true, SameSite: "Lax"},
+			{Name: "by-url", Value: "x", URL: "https://example.com/app"},
+		},
+		Origins: []Origin{{Origin: "https://example.com", LocalStorage: []NameValue{{Name: "token", Value: "t0k3n"}}}},
+	}
+	if !reflect.DeepEqual(s.StorageState, want) {
+		t.Errorf("StorageState = %+v, want %+v", s.StorageState, want)
 	}
 
 	plain, err := Parse(readSample(t, "valid/default-langs.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.StorageState != "" || plain.OutputDir != "" {
-		t.Errorf("storageState and outputDir are optional and stay empty, got %q %q", plain.StorageState, plain.OutputDir)
+	if plain.StorageState != nil || plain.OutputDir != "" {
+		t.Errorf("storageState and outputDir are optional and stay empty, got %v %q", plain.StorageState, plain.OutputDir)
 	}
 }
 
@@ -131,6 +141,8 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/unknown-action.yaml", "/steps/0/action", ""},
 		{"invalid/missing-baseurl.yaml", "", "baseUrl"},
 		{"invalid/baseurl-relative.yaml", "/baseUrl", "baseUrl must be an absolute http or https URL: /app"},
+		{"invalid/cookie-no-domain.yaml", "/storageState/cookies/0", ""},
+		{"invalid/storagestate-is-path.yaml", "/storageState", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {

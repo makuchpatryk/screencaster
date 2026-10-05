@@ -123,7 +123,7 @@ Go has no inheritance. The rule is about not rebuilding it.
 ## Working agreements
 
 - **Context.** Anything that blocks or spawns a process takes `ctx` first. Cancellation must close the browser and delete temp files (FR-008).
-- **Errors.** Return, don't panic. Wrap with `%w`. Step, TTS and assembly failures become `core/failure.Failure` before leaving `core`. Use `errors.Is/As`, never match message text. Messages the PRD specifies (`storageState not found: /work/auth/s.json`, `job not found: <id>`, `tts failed at step <n> (<lang>): …`) are reproduced exactly.
+- **Errors.** Return, don't panic. Wrap with `%w`. Step, TTS and assembly failures become `core/failure.Failure` before leaving `core`. Use `errors.Is/As`, never match message text. Messages the PRD specifies (`outputDir must stay inside the working directory: ../out`, `job not found: <id>`, `tts failed at step <n> (<lang>): …`) are reproduced exactly.
 - **Fail early.** Validate script, narration, voices and storageState before starting a browser or Piper (FR-002, BR-011).
 - **Cleanup.** Temp files go under `.screencaster/tmp/<runId>/` and are removed with `defer` on success and abort. Write to `outputDir` only in the final publish step. Never open an existing output for writing (BR-006).
 - **Subprocesses.** `exec.CommandContext`, stdout and stderr captured, never inherited. Keep the last lines of stderr for error messages.

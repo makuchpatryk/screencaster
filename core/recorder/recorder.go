@@ -36,7 +36,7 @@ type Session interface {
 type LaunchOptions struct {
 	VideoDir     string
 	BaseURL      string
-	StorageState string
+	StorageState *script.StorageState
 }
 
 // Recorder records one language at a time. Launch, Now and Sleep are injected
@@ -73,7 +73,7 @@ type Input struct {
 	Lang         string
 	Dir          string // video output directory
 	BaseURL      string
-	StorageState string
+	StorageState *script.StorageState // nil: logged-out session
 	OnStep       func(i int)
 }
 

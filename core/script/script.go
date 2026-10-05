@@ -37,12 +37,46 @@ const (
 type Script struct {
 	Name         string            `json:"name"`
 	BaseURL      string            `json:"baseUrl"`
-	StorageState string            `json:"storageState"`
+	StorageState *StorageState     `json:"storageState"`
 	OutputDir    string            `json:"outputDir"`
 	Languages    []string          `json:"languages"`
 	Voices       map[string]string `json:"voices"`
 	Meta         *Meta             `json:"meta"`
 	Steps        []Step            `json:"steps"`
+}
+
+// StorageState is the session the browser starts with, in the shape of
+// Playwright's context.storageState(). The tags are Playwright's, so core/browser
+// can hand it over by a JSON round trip. omitempty keeps unset fields out of the
+// JSON, which the explore_page input schema is inferred from.
+type StorageState struct {
+	Cookies []Cookie `json:"cookies,omitempty"`
+	Origins []Origin `json:"origins,omitempty"`
+}
+
+// Cookie needs a URL, or both Domain and Path (the schema checks this).
+type Cookie struct {
+	Name     string  `json:"name"`
+	Value    string  `json:"value"`
+	URL      string  `json:"url,omitempty"`
+	Domain   string  `json:"domain,omitempty"`
+	Path     string  `json:"path,omitempty"`
+	Expires  float64 `json:"expires,omitempty"` // Unix seconds, -1 for a session cookie
+	HTTPOnly bool    `json:"httpOnly,omitempty"`
+	Secure   bool    `json:"secure,omitempty"`
+	SameSite string  `json:"sameSite,omitempty"` // Strict, Lax or None
+}
+
+// Origin holds the localStorage of one origin.
+type Origin struct {
+	Origin       string      `json:"origin"`
+	LocalStorage []NameValue `json:"localStorage,omitempty"`
+}
+
+// NameValue is one localStorage entry.
+type NameValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // Meta is written to the MP4 title and comment tags (FR-009.5).

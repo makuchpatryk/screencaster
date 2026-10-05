@@ -18,7 +18,9 @@ import (
 
 const twoStepsEnPl = `name: demo
 baseUrl: http://host.docker.internal:3000
-storageState: auth/storageState.json
+storageState:
+  cookies:
+    - {name: session, value: abc, domain: host.docker.internal, path: /}
 languages: [en, pl]
 meta:
   title: Demo title
@@ -165,8 +167,8 @@ func TestRender_clipsReachRecorderAndAssembler(t *testing.T) { // FR-007, FR-009
 	if want := map[int]time.Duration{0: 6 * time.Second, 2: 6 * time.Second}; !reflect.DeepEqual(en.Clips, want) {
 		t.Errorf("recorder clips = %v, want %v (keyed by step, unnarrated step absent)", en.Clips, want)
 	}
-	if en.BaseURL != "http://host.docker.internal:3000" || filepath.Base(en.StorageState) != "storageState.json" {
-		t.Errorf("recorder context = %q, %q", en.BaseURL, en.StorageState)
+	if en.BaseURL != "http://host.docker.internal:3000" || en.StorageState == nil || len(en.StorageState.Cookies) != 1 || en.StorageState.Cookies[0].Name != "session" {
+		t.Errorf("recorder context = %q, %+v", en.BaseURL, en.StorageState)
 	}
 
 	asm := f.asmIn[0]
