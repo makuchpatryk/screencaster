@@ -330,7 +330,7 @@ None identified by user.
 ### FR-012: MCP tool `render_video`
 - **Implements:** BP-001, BR-008
 - **Description:** The `screencaster-mcp` binary (stdio transport, official `modelcontextprotocol/go-sdk`) must expose `render_video`.
-  - **Input:** `{ "script": string, "languages"?: string[] }` (language codes); `script` is a path relative to the working dir, and `languages` overrides the script's `languages` (BR-002).
+  - **Input:** `{ "script": string, "languages"?: string[] }` (language codes); `script` is a path relative to the working dir (a path that resolves outside it → tool error `script must stay inside the working directory: <value>`), and `languages` overrides the script's `languages` (BR-002).
   - **Validation:** It must validate the script, its voices and its storageState (FR-001, FR-002) synchronously.
   - **On success:** It must insert a `queued` job and return `{ jobId, status: "queued", position }`.
   - **Tool description:** It must contain the full JSON Schema of the script format, an example script, and these rules: relative URLs only, narration text required for every selected language (`languages`, default `["en"]`), no login steps.

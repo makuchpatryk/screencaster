@@ -166,6 +166,18 @@ func outsideWorkDir(field, value string) string {
 	return field + " must stay inside the working directory: " + value
 }
 
+// ScriptPath checks that a script path from tool input stays inside workDir,
+// so a render_video call cannot make the parser read, and quote in its errors,
+// files elsewhere in the container. The CLI does not use it: a developer may
+// name any script (Request.ScriptPath).
+func ScriptPath(workDir, p string) (string, error) {
+	abs, ok := within(workDir, p)
+	if !ok {
+		return "", errors.New(outsideWorkDir("script", p))
+	}
+	return abs, nil
+}
+
 // StorageStatePath resolves a storageState path against workDir and checks it
 // is an existing file inside workDir. It is the one rule for the script's
 // storageState (Prepare) and explore_page's input, which are both LLM-written.

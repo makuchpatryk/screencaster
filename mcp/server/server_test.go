@@ -223,6 +223,32 @@ func TestRenderVideo_missingScriptIsToolError(t *testing.T) {
 	}
 }
 
+// Decision 58: the script path is LLM-written, so a path outside the working
+// directory is refused before any file is read, and no job row is created.
+func TestRenderVideo_scriptOutsideWorkDirIsRefused(t *testing.T) {
+	e := newEnv(t)
+	e.writeFile("demos/ok.yaml", validScript)
+	outside := filepath.Join(t.TempDir(), "other.yaml")
+	if err := os.WriteFile(outside, []byte(validScript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{"../other.yaml", "/etc/passwd", outside} {
+		res := e.call(t, "render_video", map[string]any{"script": p})
+		want := "script must stay inside the working directory: " + p
+		if !res.IsError || text(res) != want {
+			t.Errorf("script %q: %v %q, want error %q", p, res.IsError, text(res), want)
+		}
+	}
+
+	// An absolute path inside the working directory is fine.
+	inside := filepath.Join(e.work, "demos/ok.yaml")
+	out := decode[renderOut](t, e.call(t, "render_video", map[string]any{"script": inside}))
+	if out.Position != 1 {
+		t.Errorf("absolute path inside the work dir = %+v, want queued at 1 (the refused calls left no row)", out)
+	}
+}
+
 // Decision 58: the work dir holds the demo and nothing else, and the
 // storageState check runs at submit time with no job row on failure.
 func TestRenderVideo_needsNoProjectConfig(t *testing.T) {

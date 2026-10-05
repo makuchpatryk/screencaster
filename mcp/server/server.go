@@ -111,6 +111,10 @@ type renderOut struct {
 }
 
 func (h handlers) renderVideo(ctx context.Context, _ *mcp.CallToolRequest, in renderIn) (*mcp.CallToolResult, renderOut, error) {
+	// The tool input is LLM-written, so the script path is not trusted (decision 58).
+	if _, err := renderer.ScriptPath(h.WorkDir, in.Script); err != nil {
+		return nil, renderOut{}, err
+	}
 	installed, err := h.Voices()
 	if err != nil {
 		return nil, renderOut{}, err
