@@ -1,6 +1,6 @@
 # screencaster
 
-Turn a natural-language description into a narrated demo video (MP4) with re-renderable YAML scripts.
+Write a YAML script, run one command, get a narrated MP4 of a website. Offline, re-renderable, no LLM at render time.
 
 ![screencaster rendering a demo from the terminal, then playing the video](docs/demo.gif)
 
@@ -53,12 +53,14 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
        selector: input[name="name"]
        value: My Project
    ```
+   `narration` is optional on every step; a step without it is silent. A step that has it needs an entry for every selected language, and an empty string (`en: ""`) keeps the step silent in that language.
+
    `storageState` has the shape of Playwright's `context.storageState()` (`cookies`, `origins` with `localStorage`); paste an exported file here as it is (JSON is valid YAML). It holds live session secrets, so keep a demo that has one out of git. A demo for a public site is just `name`, `baseUrl` and `steps`: no other file is needed. A `screencaster.yaml` from an earlier version is ignored (with a warning); move its fields into the demo.
 
    **Start and end cards.** Every video starts with a 3 s card (the `meta` title and description) and ends with a 3 s card (a closing line in the video's language and the title), so it looks finished without an editing step. `intro` and `outro` change a card: `image` shows your picture full-frame (scaled to fit on a dark background; give it instead of `title` and `subtitle`), `title` and `subtitle` change the text, `durationMs` the time (500 to 10000), and `false` drops the card. The video is 6 s longer than the recording; use `intro: false` and `outro: false` for the plain recording. A demo for `demos/my-demo.yaml` with a logo keeps it in `demos/assets/logo.png`.
 
 4. **Render**:
-   - CLI: `screencaster render demos/my-demo.yaml`; it prints what it does on stderr (a start summary, one line per phase and language with its time, an end summary) and the video paths on stdout
+   - CLI: `screencaster render demos/my-demo.yaml` (`--lang en,pl` overrides the script's `languages`); it prints what it does on stderr (a start summary, one line per phase and language with its time, an end summary) and the video paths on stdout
    - MCP (in Claude Code): describe what you want, Claude writes the YAML and renders
 
 ## Docs
@@ -81,7 +83,7 @@ Makefile
 
 ## Development
 
-The host needs only Docker. Go, golangci-lint and (from M2) Chromium, Piper and ffmpeg live in the dev image; the source is mounted, not copied.
+The host needs only Docker. Go, golangci-lint, Chromium, Piper and ffmpeg live in the dev image; the source is mounted, not copied.
 
 ```bash
 make dev-image   # build the dev image once, rebuild when the Dockerfile changes
