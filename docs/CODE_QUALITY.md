@@ -64,7 +64,7 @@ Layout: ARCHITECTURE §3.
 
 | Package | Job | Must not |
 |---|---|---|
-| `core/config`, `core/script` | parse and validate input into typed values | start processes or touch the browser |
+| `core/script` | parse and validate input into typed values | start processes or touch the browser |
 | `core/voices`, `core/failure` | pure resolution and error types | do I/O beyond listing voice files |
 | `core/tts`, `core/assembler`, `core/browser` | wrap one external tool each | know about jobs, language policy or the queue |
 | `core/executor` | run one step | decide timing between steps or know about narration |
@@ -81,7 +81,7 @@ Hard rules:
 - `core` imports neither SQLite nor the MCP SDK.
 - Only `core/tts`, `core/assembler` and `core/browser` call `os/exec` or playwright-go.
 - Domain rules (validation, language and voice resolution) live in `core`, never in `main` or a handler.
-- Paths, `baseUrl` and `outputDir` come from `core/config` and are passed down. No package reads env vars or the working directory itself.
+- Paths, `baseUrl` and `outputDir` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself.
 - `screencaster-mcp` never writes to stdout except protocol frames. Logs go to stderr (ARCHITECTURE §12).
 
 ## SOLID
@@ -97,14 +97,14 @@ Applied to packages, functions and small structs.
 
 **Liskov substitution.** Fakes of `Recorder`, `Synthesizer`, `Assembler` and `Session` return the same error types, respect `ctx` cancellation and leave no files behind, like the real ones. The executor behaves identically in both modes except visuals, so an explore selector works in a render (FR-017 AC3).
 
-**Interface segregation.** Interfaces are small and declared by the consumer (`renderer` declares the 1–3 methods it needs). Functions take what they use: `resolveVoices(langs, scriptVoices, cfgVoices, installed)` takes maps and a set, not `Config` and `Script`.
+**Interface segregation.** Interfaces are small and declared by the consumer (`renderer` declares the 1–3 methods it needs). Functions take what they use: `resolveVoices(langs, scriptVoices, installed)` takes maps and a set, not the whole `Script`.
 
 **Dependency inversion.** `renderer` depends on interfaces, unit tests pass fakes. Time and run IDs are injected so tests get deterministic filenames. Wrappers take binary and voice paths as constructor arguments. Wire by hand in `main`.
 
 ## Law of Demeter
 
-- Validation produces a `Plan` (languages, voice per language, steps, paths). The pipeline uses it, not `cfg`, `script` and the voice directory again.
-- Pass exactly what a function needs: `tts.Synthesize(ctx, voice, text, outPath)`, not the step and config.
+- Validation produces a `Plan` (languages, voice per language, steps, paths). The pipeline uses it, not the script file and the voice directory again.
+- Pass exactly what a function needs: `tts.Synthesize(ctx, voice, text, outPath)`, not the step and the plan.
 - Let a function answer the question: `queue.Position(id)`, not the caller counting rows.
 - No chains like `job.Result.Outputs[0].Meta.Path`. Add an accessor or flatten the type.
 - Callers never parse Piper or ffmpeg output. `tts` returns a duration, `assembler` returns a path. Tool stderr appears only inside a `Failure` message.
@@ -123,8 +123,8 @@ Go has no inheritance. The rule is about not rebuilding it.
 ## Working agreements
 
 - **Context.** Anything that blocks or spawns a process takes `ctx` first. Cancellation must close the browser and delete temp files (FR-008).
-- **Errors.** Return, don't panic. Wrap with `%w`. Step, TTS and assembly failures become `core/failure.Failure` before leaving `core`. Use `errors.Is/As`, never match message text. Messages the PRD specifies (`config not found: /work/screencaster.yaml`, `job not found: <id>`, `tts failed at step <n> (<lang>): …`) are reproduced exactly.
-- **Fail early.** Validate config, script, narration and voices before starting a browser or Piper (FR-002, BR-011).
+- **Errors.** Return, don't panic. Wrap with `%w`. Step, TTS and assembly failures become `core/failure.Failure` before leaving `core`. Use `errors.Is/As`, never match message text. Messages the PRD specifies (`storageState not found: /work/auth/s.json`, `job not found: <id>`, `tts failed at step <n> (<lang>): …`) are reproduced exactly.
+- **Fail early.** Validate script, narration, voices and storageState before starting a browser or Piper (FR-002, BR-011).
 - **Cleanup.** Temp files go under `.screencaster/tmp/<runId>/` and are removed with `defer` on success and abort. Write to `outputDir` only in the final publish step. Never open an existing output for writing (BR-006).
 - **Subprocesses.** `exec.CommandContext`, stdout and stderr captured, never inherited. Keep the last lines of stderr for error messages.
 - **Determinism.** No LLM calls, no HTTP clients, nothing random in anything that affects output (BR-001, NFR-003).

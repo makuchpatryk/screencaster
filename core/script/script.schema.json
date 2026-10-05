@@ -3,12 +3,27 @@
   "title": "screencaster demo script",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "steps"],
+  "required": ["name", "baseUrl", "steps"],
   "properties": {
     "name": {
       "description": "Used in output filenames: <name>.<lang>.<timestamp>.mp4",
       "type": "string",
       "pattern": "^[a-z0-9-]{1,64}$"
+    },
+    "baseUrl": {
+      "description": "Absolute http(s) URL of the app. Relative goto URLs resolve against it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "storageState": {
+      "description": "Playwright storageState JSON, relative to the working directory and inside it. Omit for a fresh, logged-out session.",
+      "type": "string",
+      "minLength": 1
+    },
+    "outputDir": {
+      "description": "Where MP4s are written, relative to the working directory and inside it. Default output.",
+      "type": "string",
+      "minLength": 1
     },
     "languages": {
       "description": "Languages to render, in order. Default [\"en\"]. A render-time override wins. Every narrated step needs narration text for each selected language.",
@@ -16,7 +31,7 @@
       "items": { "$ref": "#/$defs/lang" }
     },
     "voices": {
-      "description": "Piper voice name per language code. Falls back to screencaster.yaml, then the built-in en/pl voices.",
+      "description": "Piper voice name per language code. Falls back to the built-in en/pl voices.",
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/lang" },
       "additionalProperties": { "type": "string", "minLength": 1 }

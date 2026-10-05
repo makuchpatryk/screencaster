@@ -4,11 +4,17 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"screencaster/core/renderer"
 )
+
+// ignoredConfigFile is the retired per-project config (decision 58). Nothing
+// reads it; its presence only gets a warning.
+const ignoredConfigFile = "screencaster.yaml"
 
 // renderFunc is the pipeline; tests pass a fake.
 type renderFunc func(ctx context.Context, req renderer.Request) ([]renderer.Output, error)
@@ -22,6 +28,9 @@ func run(ctx context.Context, args []string, workDir string, render renderFunc, 
 		Short:         "Render demo scripts into narrated MP4 videos",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ignoredConfigFile)); err == nil {
+		_, _ = fmt.Fprintln(stderr, ignoredConfigFile+" is ignored; move its fields into the demo script")
 	}
 	root.AddCommand(renderCmd(workDir, render, stdout, stderr))
 	root.SetArgs(args)

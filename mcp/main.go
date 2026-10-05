@@ -64,6 +64,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Decision 58: the retired config is never read. slog goes to stderr.
+	if _, err := os.Stat(filepath.Join(wd, "screencaster.yaml")); err == nil {
+		slog.Warn("screencaster.yaml is ignored; move its fields into the demo script")
+	}
+
 	state := filepath.Join(wd, stateDir)
 	store, err := queue.Open(filepath.Join(state, dbFile), time.Now)
 	if err != nil {

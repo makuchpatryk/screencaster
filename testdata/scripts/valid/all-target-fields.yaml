@@ -1,0 +1,8 @@
+# Every target field of the demo: where to go, who is logged in, where MP4s land.
+name: all-target-fields
+baseUrl: https://example.com/app
+storageState: auth/storageState.json
+outputDir: videos
+steps:
+  - action: goto
+    url: /projects

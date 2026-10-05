@@ -47,6 +47,7 @@ func TestParse_validSamples(t *testing.T) {
 		{"valid/default-langs.yaml", nil, 2},
 		{"valid/en-pl.yaml", []string{"en", "pl"}, 2},
 		{"valid/all-actions.yaml", nil, 12},
+		{"valid/all-target-fields.yaml", nil, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -95,6 +96,24 @@ func TestParse_decodesFields(t *testing.T) {
 	}
 }
 
+func TestParse_decodesTargetFields(t *testing.T) {
+	s, err := Parse(readSample(t, "valid/all-target-fields.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.BaseURL != "https://example.com/app" || s.StorageState != "auth/storageState.json" || s.OutputDir != "videos" {
+		t.Errorf("target fields = %q %q %q", s.BaseURL, s.StorageState, s.OutputDir)
+	}
+
+	plain, err := Parse(readSample(t, "valid/default-langs.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.StorageState != "" || plain.OutputDir != "" {
+		t.Errorf("storageState and outputDir are optional and stay empty, got %q %q", plain.StorageState, plain.OutputDir)
+	}
+}
+
 func TestParse_invalidSamples(t *testing.T) {
 	tests := []struct {
 		file        string
@@ -110,6 +129,8 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/bad-lang-code.yaml", "/languages/0", ""},
 		{"invalid/goto-missing-url.yaml", "/steps/0", "url"},
 		{"invalid/unknown-action.yaml", "/steps/0/action", ""},
+		{"invalid/missing-baseurl.yaml", "", "baseUrl"},
+		{"invalid/baseurl-relative.yaml", "/baseUrl", "baseUrl must be an absolute http or https URL: /app"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -137,6 +158,7 @@ func TestParse_oneRootCausePerBrokenStep(t *testing.T) {
 		{"invalid/scroll-selector-and-y.yaml", "/steps/0"},
 		{"invalid/wait-ms-zero.yaml", "/steps/1/ms"},
 		{"invalid/unknown-action.yaml", "/steps/0/action"},
+		{"invalid/baseurl-relative.yaml", "/baseUrl"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -164,10 +186,31 @@ func TestParse_reportsAllErrorsAtOnce(t *testing.T) {
 // Each action's rules sit behind an if on `action`; without one, no branch
 // may fire and flood the output with every action's required fields.
 func TestParse_missingActionDoesNotTriggerEveryBranch(t *testing.T) {
-	errs := parseErrors(t, []byte("name: demo\nsteps:\n  - narration: {en: hi}\n"))
+	errs := parseErrors(t, []byte("name: demo\nbaseUrl: http://x\nsteps:\n  - narration: {en: hi}\n"))
 	want := failure.ValidationErrors{{Pointer: "/steps/0", Message: "missing property 'action'"}}
 	if !reflect.DeepEqual(errs, want) {
 		t.Errorf("errors = %v, want %v", errs, want)
+	}
+}
+
+func TestAbsoluteHTTP(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"http://host.docker.internal:3000", true},
+		{"https://example.com/app", true},
+		{"ftp://x", false},
+		{"/path", false},
+		{"http://", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := AbsoluteHTTP(tt.in); got != tt.want {
+				t.Errorf("AbsoluteHTTP(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 

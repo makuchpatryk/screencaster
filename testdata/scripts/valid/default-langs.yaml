@@ -1,5 +1,6 @@
 # No `languages` field: renders ["en"], so narration.en alone is enough (FR-002 AC2).
 name: default-langs
+baseUrl: http://host.docker.internal:3000
 steps:
   - action: goto
     url: /projects

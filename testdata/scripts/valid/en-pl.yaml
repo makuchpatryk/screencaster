@@ -1,4 +1,5 @@
 name: en-pl
+baseUrl: http://host.docker.internal:3000
 languages: [en, pl]
 voices:
   pl: pl_PL-gosia-medium

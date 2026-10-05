@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,10 +24,13 @@ import (
 // plosive so the speech onset is sharp.
 const markerText = "Bang. This is the marker."
 
-// renderScript covers every action, two narrated steps on the way and the
+// renderScript is a format template: %s is the fixture's base URL. It covers
+// every action, two narrated steps on the way and the
 // narrated marker step: press Enter on #marker flashes the viewport white.
 // press has no cursor glide, so the flash starts right at the step offset.
 const renderScript = `name: e2e-demo
+baseUrl: %s
+storageState: auth/storageState.json
 meta:
   title: E2E demo
   description: Every action plus the drift marker.
@@ -78,7 +82,10 @@ steps:
     ms: 1500
 `
 
+// failingScript is a format template too: %s is the fixture's base URL.
 const failingScript = `name: e2e-fail
+baseUrl: %s
+storageState: auth/storageState.json
 steps:
   - action: goto
     url: /index.html
@@ -108,8 +115,8 @@ func cliBinary(t *testing.T) string {
 	return bin
 }
 
-// project builds a work dir like a user's repo: config, storageState and the
-// scripts under demos/.
+// project builds a work dir like a user's repo: the storageState and the
+// scripts under demos/. Each script carries its own baseUrl (decision 58).
 func project(t *testing.T, baseURL string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -118,10 +125,9 @@ func project(t *testing.T, baseURL string) string {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"screencaster.yaml":      "baseUrl: " + baseURL + "\nstorageState: auth/storageState.json\n",
 		"auth/storageState.json": string(state),
-		"demos/e2e-demo.yaml":    renderScript,
-		"demos/e2e-fail.yaml":    failingScript,
+		"demos/e2e-demo.yaml":    fmt.Sprintf(renderScript, baseURL),
+		"demos/e2e-fail.yaml":    fmt.Sprintf(failingScript, baseURL),
 	}
 	for rel, content := range files {
 		p := filepath.Join(dir, rel)
@@ -241,6 +247,45 @@ func TestRender_cliFailureLeavesOutputUnchanged(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, ".screencaster", "tmp", "*")); len(left) > 0 {
 		t.Errorf("temp dirs left behind: %v", left)
+	}
+}
+
+// publicScript is a whole demo of a public site: no storageState, and nothing
+// else in the work dir (decision 58). It reuses assertVideo's tags.
+const publicScript = `name: e2e-demo
+baseUrl: %s
+meta:
+  title: E2E demo
+  description: Every action plus the drift marker.
+steps:
+  - action: goto
+    url: /marker.html
+  - action: wait
+    ms: 500
+`
+
+// Decision 58: one file and one command. The work dir holds only the demo, so
+// there is no screencaster.yaml and no storageState to read.
+func TestRender_publicSiteNoStorageState(t *testing.T) {
+	bin := cliBinary(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "demos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(publicScript, fixtureApp(t))
+	if err := os.WriteFile(filepath.Join(dir, "demos", "e2e-demo.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runCLI(t, bin, dir, "render", "demos/e2e-demo.yaml")
+	if res.code != 0 {
+		t.Fatalf("render exit %d\n%s", res.code, res.stderr)
+	}
+	for _, p := range outputPaths(t, res.stdout, "en") {
+		assertVideo(t, p)
+	}
+	if strings.Contains(res.stderr, "screencaster.yaml") {
+		t.Errorf("stderr mentions screencaster.yaml although none exists:\n%s", res.stderr)
 	}
 }
 

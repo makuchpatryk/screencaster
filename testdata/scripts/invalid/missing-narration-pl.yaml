@@ -1,5 +1,6 @@
 # Schema-valid; fails the cross-field rule (FR-002 AC1).
 name: demo
+baseUrl: http://host.docker.internal:3000
 languages: [en, pl]
 steps:
   - action: goto

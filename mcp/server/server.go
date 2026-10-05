@@ -17,7 +17,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"screencaster/core/config"
 	"screencaster/core/explorer"
 	"screencaster/core/failure"
 	"screencaster/core/renderer"
@@ -35,9 +34,7 @@ const (
 	noDescription = "(none given)"
 )
 
-// Deps are the collaborators of the server, wired in main. Config is loaded
-// per call, so a missing screencaster.yaml is a tool error, not a startup
-// crash.
+// Deps are the collaborators of the server, wired in main.
 type Deps struct {
 	WorkDir  string
 	Store    *queue.Store
@@ -66,12 +63,13 @@ func New(d Deps, version string) *mcp.Server {
 		Name: "explore_page",
 		Description: "Open a page of the app in a fresh browser and return its accessibility tree. " +
 			"Every interactive line ends with `-> <selector>`, a selector that is unique on the page and works unchanged in a script step. " +
-			"`url` is resolved like a goto step. `actions` (script steps without narration) are replayed first to reach a deeper page state; every call starts from scratch. " +
+			"`url` must be absolute: pass the demo's baseUrl joined with the path, and its storageState if the app needs a login. " +
+			"`actions` (script steps without narration) are replayed first to reach a deeper page state; a relative goto there resolves against `url`. Every call starts from scratch. " +
 			"A failing action returns an error naming the step plus the snapshot at that point.",
 	}, h.explorePage)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_options",
-		Description: "Installed languages and voices (with defaults), audiences, names of existing demos and the app's baseUrl. Call before asking the developer what to render.",
+		Description: "Installed languages and voices (with defaults), audiences, names of existing demos. Call before asking the developer what to render.",
 	}, h.options)
 
 	s.AddPrompt(&mcp.Prompt{
@@ -92,9 +90,9 @@ func renderDescription() string {
 		"The script is validated now; on success the job is queued and its id and queue position are returned. " +
 		"Poll `get_render_status` with the id.\n\n" +
 		"Rules:\n" +
-		"- URLs are paths relative to baseUrl (for example /projects). Only an absolute http(s) URL is used as-is.\n" +
+		"- URLs are paths relative to the script's `baseUrl` (for example /projects). Only an absolute http(s) URL is used as-is.\n" +
 		"- Every narrated step needs narration text for every selected language.\n" +
-		"- No login steps: authentication comes from the project's storageState.\n\n" +
+		"- No login steps: authentication comes from the script's optional `storageState`.\n\n" +
 		"Script format (JSON Schema):\n" + string(script.SchemaJSON()) + "\n\n" +
 		"Example script:\n" + string(script.ExampleYAML())
 }
@@ -168,8 +166,9 @@ func (h handlers) renderStatus(ctx context.Context, _ *mcp.CallToolRequest, in s
 // ---- explore_page ----
 
 type exploreIn struct {
-	URL     string        `json:"url" jsonschema:"page to open, resolved like a goto step"`
-	Actions []script.Step `json:"actions,omitempty" jsonschema:"script steps to replay before the snapshot (narration is ignored)"`
+	URL          string        `json:"url" jsonschema:"absolute http(s) URL of the page to open"`
+	StorageState string        `json:"storageState,omitempty" jsonschema:"Playwright storageState JSON relative to the project directory and inside it; omit for a logged-out session"`
+	Actions      []script.Step `json:"actions,omitempty" jsonschema:"script steps to replay before the snapshot (narration is ignored)"`
 }
 
 type exploreOut struct {
@@ -183,12 +182,20 @@ func (h handlers) explorePage(ctx context.Context, _ *mcp.CallToolRequest, in ex
 	if err := script.ValidateSteps(in.Actions); err != nil {
 		return nil, exploreOut{}, err
 	}
-	cfg, err := config.Load(h.WorkDir)
-	if err != nil {
-		return nil, exploreOut{}, err
+	if !script.AbsoluteHTTP(in.URL) {
+		return nil, exploreOut{}, fmt.Errorf("url must be an absolute http or https URL: %s", in.URL)
 	}
+	var storageState string
+	if in.StorageState != "" {
+		var err error
+		if storageState, err = renderer.StorageStatePath(h.WorkDir, in.StorageState); err != nil {
+			return nil, exploreOut{}, err
+		}
+	}
+	// The url is also the base, so a relative goto in actions resolves against
+	// the page being explored (BR-010, decision 59).
 	out, err := h.Explorer.Explore(ctx, explorer.Input{
-		BaseURL: cfg.BaseURL, StorageState: cfg.StorageState, URL: in.URL, Actions: in.Actions,
+		BaseURL: in.URL, StorageState: storageState, URL: in.URL, Actions: in.Actions,
 	})
 	var f *failure.Failure
 	if errors.As(err, &f) {
@@ -214,20 +221,15 @@ type optionsOut struct {
 	Languages    []languageOut `json:"languages"`
 	Audiences    []string      `json:"audiences"`
 	ExistingDemo []string      `json:"existingDemos"`
-	BaseURL      string        `json:"baseUrl"`
 }
 
 func (h handlers) options(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, optionsOut, error) {
-	cfg, err := config.Load(h.WorkDir)
-	if err != nil {
-		return nil, optionsOut{}, err
-	}
 	installed, err := h.Voices()
 	if err != nil {
 		return nil, optionsOut{}, err
 	}
 	langs := []languageOut{}
-	for _, o := range voices.Options(installed, cfg.Voices) {
+	for _, o := range voices.Options(installed) {
 		l := languageOut{Code: o.Code, SelectedByDefault: o.SelectedByDefault, Voices: o.Voices}
 		if o.DefaultVoice != "" {
 			l.DefaultVoice = &o.DefaultVoice
@@ -238,7 +240,6 @@ func (h handlers) options(_ context.Context, _ *mcp.CallToolRequest, _ struct{})
 		Languages:    langs,
 		Audiences:    script.Audiences,
 		ExistingDemo: existingDemos(h.WorkDir),
-		BaseURL:      cfg.BaseURL,
 	}, nil
 }
 

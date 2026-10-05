@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -34,11 +35,14 @@ const (
 
 // Script is a parsed demo script.
 type Script struct {
-	Name      string            `json:"name"`
-	Languages []string          `json:"languages"`
-	Voices    map[string]string `json:"voices"`
-	Meta      *Meta             `json:"meta"`
-	Steps     []Step            `json:"steps"`
+	Name         string            `json:"name"`
+	BaseURL      string            `json:"baseUrl"`
+	StorageState string            `json:"storageState"`
+	OutputDir    string            `json:"outputDir"`
+	Languages    []string          `json:"languages"`
+	Voices       map[string]string `json:"voices"`
+	Meta         *Meta             `json:"meta"`
+	Steps        []Step            `json:"steps"`
 }
 
 // Meta is written to the MP4 title and comment tags (FR-009.5).
@@ -87,6 +91,13 @@ var compiledSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
 	return c.Compile(schemaURL)
 })
 
+// AbsoluteHTTP reports whether raw is an absolute http or https URL with a
+// host. It is the one URL rule for baseUrl and explore_page's url (BR-010).
+func AbsoluteHTTP(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 // Parse decodes YAML, validates it against the schema and returns the typed
 // script. Problems with the input are returned as failure.ValidationErrors,
 // all of them at once.
@@ -117,6 +128,13 @@ func Parse(data []byte) (Script, error) {
 	if err := json.Unmarshal(jsonData, &s); err != nil {
 		return Script{}, fmt.Errorf("decode script: %w", err)
 	}
+	// The schema only says "non-empty string"; the URL rule lives in Go.
+	if !AbsoluteHTTP(s.BaseURL) {
+		return Script{}, failure.ValidationErrors{{
+			Pointer: "/baseUrl",
+			Message: "baseUrl must be an absolute http or https URL: " + s.BaseURL,
+		}}
+	}
 	return s, nil
 }
 
@@ -128,10 +146,13 @@ func ValidateSteps(steps []Step) error {
 	if len(steps) == 0 {
 		return nil
 	}
+	// Placeholder name and baseUrl satisfy the script's required fields; only
+	// the steps are being checked.
 	data, err := json.Marshal(struct {
-		Name  string `json:"name"`
-		Steps []Step `json:"steps"`
-	}{"explore", steps})
+		Name    string `json:"name"`
+		BaseURL string `json:"baseUrl"`
+		Steps   []Step `json:"steps"`
+	}{"explore", "http://explore.invalid", steps})
 	if err != nil {
 		return fmt.Errorf("encode steps: %w", err)
 	}

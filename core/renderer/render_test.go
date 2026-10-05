@@ -17,6 +17,8 @@ import (
 )
 
 const twoStepsEnPl = `name: demo
+baseUrl: http://host.docker.internal:3000
+storageState: auth/storageState.json
 languages: [en, pl]
 meta:
   title: Demo title
@@ -123,7 +125,7 @@ func assertNoLeftovers(t *testing.T, dir string, want ...string) {
 }
 
 func TestRender_validationFailsBeforeAnyWork(t *testing.T) { // FR-002, BR-011
-	dir := workDir(t, configYAML, enPlMissingPl)
+	dir := workDir(t, enPlMissingPl)
 	f := &fakes{}
 
 	_, err := Render(context.Background(), f.deps(), request(dir))
@@ -137,7 +139,7 @@ func TestRender_validationFailsBeforeAnyWork(t *testing.T) { // FR-002, BR-011
 }
 
 func TestRender_ttsRunsBeforeRecordingPerLanguage(t *testing.T) { // FR-003, FR-004, ARCHITECTURE §4
-	dir := workDir(t, configYAML, twoStepsEnPl)
+	dir := workDir(t, twoStepsEnPl)
 	f := &fakes{}
 
 	if _, err := Render(context.Background(), f.deps(), request(dir)); err != nil {
@@ -153,7 +155,7 @@ func TestRender_ttsRunsBeforeRecordingPerLanguage(t *testing.T) { // FR-003, FR-
 }
 
 func TestRender_clipsReachRecorderAndAssembler(t *testing.T) { // FR-007, FR-009.1, FR-009.5
-	dir := workDir(t, configYAML, twoStepsEnPl)
+	dir := workDir(t, twoStepsEnPl)
 	f := &fakes{}
 
 	if _, err := Render(context.Background(), f.deps(), request(dir)); err != nil {
@@ -181,7 +183,7 @@ func TestRender_clipsReachRecorderAndAssembler(t *testing.T) { // FR-007, FR-009
 }
 
 func TestRender_publishesWithSharedTimestamp(t *testing.T) { // FR-010
-	dir := workDir(t, configYAML, twoStepsEnPl)
+	dir := workDir(t, twoStepsEnPl)
 	f := &fakes{}
 
 	outs, err := Render(context.Background(), f.deps(), request(dir))
@@ -199,7 +201,7 @@ func TestRender_publishesWithSharedTimestamp(t *testing.T) { // FR-010
 }
 
 func TestRender_plFailureDiscardsEn(t *testing.T) { // BR-004, FR-008
-	dir := workDir(t, configYAML, twoStepsEnPl)
+	dir := workDir(t, twoStepsEnPl)
 	f := &fakes{failRec: "pl"}
 
 	_, err := Render(context.Background(), f.deps(), request(dir))
@@ -211,7 +213,7 @@ func TestRender_plFailureDiscardsEn(t *testing.T) { // BR-004, FR-008
 }
 
 func TestRender_neverOverwrites(t *testing.T) { // BR-006
-	dir := workDir(t, configYAML, twoStepsEnPl)
+	dir := workDir(t, twoStepsEnPl)
 	existing := filepath.Join(dir, "output", "demo.pl.20261003T101500Z.mp4")
 	if err := os.MkdirAll(filepath.Dir(existing), 0o755); err != nil {
 		t.Fatal(err)
@@ -232,7 +234,7 @@ func TestRender_neverOverwrites(t *testing.T) { // BR-006
 }
 
 func TestRender_cancelRemovesTempDir(t *testing.T) { // FR-008
-	dir := workDir(t, configYAML, twoStepsEnPl)
+	dir := workDir(t, twoStepsEnPl)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f := &fakes{cancel: cancel}
@@ -255,7 +257,7 @@ func TestRender_toolFailuresBecomeFailures(t *testing.T) { // FR-003, FR-009 edg
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := workDir(t, configYAML, twoStepsEnPl)
+			dir := workDir(t, twoStepsEnPl)
 
 			_, err := Render(context.Background(), tt.f.deps(), request(dir))
 			var fl *failure.Failure
@@ -268,7 +270,7 @@ func TestRender_toolFailuresBecomeFailures(t *testing.T) { // FR-003, FR-009 edg
 }
 
 func TestRender_progressNamesEachStep(t *testing.T) { // FR-011 progress on stderr
-	dir := workDir(t, configYAML, twoStepsEnPl)
+	dir := workDir(t, twoStepsEnPl)
 	f := &fakes{}
 	req := request(dir)
 	req.LangOverride = []string{"en"}

@@ -5,6 +5,7 @@
 package renderer
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,11 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"screencaster/core/assembler"
-	"screencaster/core/config"
 	"screencaster/core/executor"
 	"screencaster/core/failure"
 	"screencaster/core/recorder"
@@ -25,8 +26,11 @@ import (
 	"screencaster/core/voices"
 )
 
-// timestampLayout is the FR-010 job-start format, UTC.
-const timestampLayout = "20060102T150405Z"
+const (
+	// timestampLayout is the FR-010 job-start format, UTC.
+	timestampLayout  = "20060102T150405Z"
+	defaultOutputDir = "output"
+)
 
 // Request says what to render. ScriptPath is relative to WorkDir unless
 // absolute. A non-empty LangOverride wins over the script's languages (BR-002).
@@ -78,27 +82,21 @@ type Output struct {
 }
 
 // Plan is everything the pipeline needs after validation, so later stages
-// never go back to the config, the script file or the voice directories.
+// never go back to the script file or the voice directories.
 type Plan struct {
-	Cfg       config.Config
-	Script    script.Script
-	Languages []string
-	Voices    map[string]string // language -> .onnx path
+	Script       script.Script
+	Languages    []string
+	Voices       map[string]string // language -> .onnx path
+	StorageState string            // absolute path of an existing file, or empty
+	OutputDir    string            // absolute
 }
 
-// Prepare validates config, script, narration and voices without starting any
-// browser, TTS or ffmpeg work (FR-001, FR-002, BR-011). Problems with the
-// script and voices come back together as failure.ValidationErrors.
+// Prepare validates script, narration, voices and storageState without
+// starting any browser, TTS or ffmpeg work (FR-001, FR-002, BR-011). Problems
+// with the script, voices and storageState come back together as
+// failure.ValidationErrors.
 func Prepare(req Request, installed voices.Installed) (Plan, error) {
-	cfg, err := config.Load(req.WorkDir)
-	if err != nil {
-		return Plan{}, err
-	}
-
-	path := req.ScriptPath
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(req.WorkDir, path)
-	}
+	path := resolve(req.WorkDir, req.ScriptPath)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Plan{}, fmt.Errorf("script not found: %s", path)
@@ -114,12 +112,73 @@ func Prepare(req Request, installed voices.Installed) (Plan, error) {
 
 	langs := script.Languages(req.LangOverride, s.Languages)
 	errs := script.Validate(s, langs)
-	paths, voiceErrs := voices.Resolve(langs, s.Voices, cfg.Voices, installed)
+	paths, voiceErrs := voices.Resolve(langs, s.Voices, installed)
 	errs = append(errs, voiceErrs...)
+
+	// The script is written by an LLM, so the paths it names must stay inside
+	// the working directory (the mounted project).
+	var storageState string
+	if s.StorageState != "" {
+		var err error
+		if storageState, err = StorageStatePath(req.WorkDir, s.StorageState); err != nil {
+			errs = append(errs, failure.ValidationError{Pointer: "/storageState", Message: err.Error()})
+		}
+	}
+
+	outputDir := cmp.Or(s.OutputDir, defaultOutputDir)
+	outputDir, ok := within(req.WorkDir, outputDir)
+	if !ok {
+		errs = append(errs, failure.ValidationError{Pointer: "/outputDir", Message: outsideWorkDir("outputDir", s.OutputDir)})
+	}
 	if len(errs) > 0 {
 		return Plan{}, errs
 	}
-	return Plan{Cfg: cfg, Script: s, Languages: langs, Voices: paths}, nil
+
+	return Plan{
+		Script:       s,
+		Languages:    langs,
+		Voices:       paths,
+		StorageState: storageState,
+		OutputDir:    outputDir,
+	}, nil
+}
+
+// resolve anchors a script path at the working directory, so no stage needs it.
+func resolve(workDir, p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(workDir, p)
+}
+
+// within resolves p against workDir and reports whether the result is workDir
+// or below it. Symlinks are not followed: the check is on the path text.
+func within(workDir, p string) (string, bool) {
+	abs := resolve(workDir, p)
+	rel, err := filepath.Rel(workDir, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return abs, false
+	}
+	return abs, true
+}
+
+func outsideWorkDir(field, value string) string {
+	return field + " must stay inside the working directory: " + value
+}
+
+// StorageStatePath resolves a storageState path against workDir and checks it
+// is an existing file inside workDir. It is the one rule for the script's
+// storageState (Prepare) and explore_page's input, which are both LLM-written.
+// The error texts are specified by the PRD (FR-001, FR-017).
+func StorageStatePath(workDir, p string) (string, error) {
+	abs, ok := within(workDir, p)
+	if !ok {
+		return "", errors.New(outsideWorkDir("storageState", p))
+	}
+	if info, err := os.Stat(abs); err != nil || info.IsDir() {
+		return "", errors.New("storageState not found: " + abs)
+	}
+	return abs, nil
 }
 
 // OutputName is the one place that builds <name>.<lang>.<timestamp>.mp4
@@ -140,7 +199,7 @@ func Render(ctx context.Context, d Deps, req Request) ([]Output, error) {
 		return nil, err
 	}
 
-	runDir := filepath.Join(plan.Cfg.WorkDir, ".screencaster", "tmp", d.RunID())
+	runDir := filepath.Join(req.WorkDir, ".screencaster", "tmp", d.RunID())
 	defer func() { _ = os.RemoveAll(runDir) }()
 
 	outs := make([]Output, 0, len(plan.Languages))
@@ -151,7 +210,7 @@ func Render(ctx context.Context, d Deps, req Request) ([]Output, error) {
 		}
 		outs = append(outs, out)
 	}
-	return publish(plan.Cfg.OutputDir, plan.Script.Name, start, outs)
+	return publish(plan.OutputDir, plan.Script.Name, start, outs)
 }
 
 // renderLanguage runs TTS, then the recording, then assembly for one language
@@ -189,8 +248,8 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, pr
 		Clips:        durations,
 		Lang:         lang,
 		Dir:          videoDir,
-		BaseURL:      plan.Cfg.BaseURL,
-		StorageState: plan.Cfg.StorageState,
+		BaseURL:      plan.Script.BaseURL,
+		StorageState: plan.StorageState,
 	}
 	if progress != nil {
 		in.OnStep = func(i int) { progress(lang, i+1, len(steps), steps[i].Action, executor.Target(steps[i])) }

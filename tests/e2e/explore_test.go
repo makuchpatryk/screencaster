@@ -44,9 +44,9 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 	dir := project(t, base)
 
 	out, err := newExplorer().Explore(context.Background(), explorer.Input{
-		BaseURL:      base,
+		BaseURL:      base + "/projects.html",
 		StorageState: filepath.Join(dir, "auth", "storageState.json"),
-		URL:          "/projects.html",
+		URL:          base + "/projects.html",
 		Actions:      []script.Step{{Action: "click", Selector: `role=button[name="New project"]`}},
 	})
 	if err != nil {
@@ -62,7 +62,7 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 	name := selectorFor(t, out.Snapshot, "textbox", "Name")
 	create := selectorFor(t, out.Snapshot, "button", "Create")
 
-	body := "name: explored\nsteps:\n" +
+	body := "name: explored\nbaseUrl: " + base + "\nstorageState: auth/storageState.json\nsteps:\n" +
 		"  - {action: goto, url: /projects.html}\n" +
 		"  - {action: click, selector: '" + newProject + "'}\n" +
 		"  - {action: fill, selector: '" + name + "', value: Demo}\n" +
@@ -86,9 +86,9 @@ func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
 	dir := project(t, base)
 	ex := newExplorer()
 	in := explorer.Input{
-		BaseURL:      base,
+		BaseURL:      base + "/names.html",
 		StorageState: filepath.Join(dir, "auth", "storageState.json"),
-		URL:          "/names.html",
+		URL:          base + "/names.html",
 	}
 	out, err := ex.Explore(context.Background(), in)
 	if err != nil {
@@ -119,9 +119,9 @@ func TestExplore_failedActionKeepsSnapshot(t *testing.T) {
 	dir := project(t, base)
 
 	out, err := newExplorer().Explore(context.Background(), explorer.Input{
-		BaseURL:      base,
+		BaseURL:      base + "/projects.html",
 		StorageState: filepath.Join(dir, "auth", "storageState.json"),
-		URL:          "/projects.html",
+		URL:          base + "/projects.html",
 		Actions:      []script.Step{{Action: "click", Selector: "#does-not-exist"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "step 1 click #does-not-exist") {

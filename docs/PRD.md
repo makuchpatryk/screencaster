@@ -77,14 +77,14 @@ N/A — confirmed by user. The MVP is an internal tool. A future commercial vers
 - **Applies to:** Job records.
 - **Exceptions:** None.
 
-### BR-010: Environment-agnostic target
-- **Rule:** Scripts must use URL paths relative to `baseUrl` from the project config. Authentication must come only from the Playwright storageState file referenced in the config. Scripts must not contain login steps.
-- **Applies to:** Scripts, config.
+### BR-010: Self-contained demo file
+- **Rule:** A demo is one self-contained YAML file. Its steps must use URL paths relative to the script's own `baseUrl`. Authentication must come only from the Playwright storageState file named by the script's optional `storageState`. Scripts must not contain login steps. Retargeting a demo at another environment means editing its `baseUrl`.
+- **Applies to:** Scripts.
 - **Exceptions:** A `goto` step with an absolute URL (`http://` or `https://`) is used as-is.
 
 ### BR-011: Voice selection
-- **Rule:** The Piper voice for each selected language must be resolved in priority order: script `voices.<lang>`, then config `voices.<lang>`, then the built-in default (only `en` → `en_US-ryan-high` and `pl` → `pl_PL-darkman-medium` have one). A selected language with no resolved voice, or with a resolved voice that is not installed, must fail validation before any browser or TTS work starts.
-- **Applies to:** Scripts, config, renders.
+- **Rule:** The Piper voice for each selected language must be resolved in priority order: script `voices.<lang>`, then the built-in default (only `en` → `en_US-ryan-high` and `pl` → `pl_PL-darkman-medium` have one). A selected language with no resolved voice, or with a resolved voice that is not installed, must fail validation before any browser or TTS work starts.
+- **Applies to:** Scripts, renders.
 - **Exceptions:** None.
 
 ## 6. Business Processes
@@ -179,13 +179,13 @@ None identified by user.
 1. `screencaster render demos/create-project.yaml`
 2. Progress output: `[en] step 3/12 click role=button[name="New project"]`.
 3. Success: prints the absolute output path(s) and exits 0.
-- **Error states:** Validation errors → printed and exits 1. Step failure → BR-004 report and exits 1. Config missing → `config not found: /work/screencaster.yaml` and exits 1.
+- **Error states:** Validation errors → printed and exits 1. Step failure → BR-004 report and exits 1. A `screencaster.yaml` in the working directory is not read; a warning `screencaster.yaml is ignored; move its fields into the demo script` is printed to stderr.
 
 ### UF-003: Explore a page
-1. Claude Code calls `explore_page({ "url": "/projects" })`.
+1. Claude Code calls `explore_page({ "url": "http://host.docker.internal:3000/projects" })`, plus `storageState` when the app needs a login.
 2. Server returns the page title and an accessibility snapshot with a ready-to-use selector for each interactive element.
 3. For pages deeper in a flow, Claude Code calls it again with `actions` that reach them (e.g. click "New project") and receives the snapshot of the resulting page.
-- **Error states:** An action fails or times out → tool error naming the step, plus the snapshot of the page at that moment. Config or storageState missing → tool error naming the missing item.
+- **Error states:** An action fails or times out → tool error naming the step, plus the snapshot of the page at that moment. A relative `url` → tool error naming the rule. `storageState` file missing → tool error `storageState not found: <path>`.
 - **Empty states:** Page with no accessible elements → empty snapshot, no error.
 
 ### UF-004: Guided creation
@@ -194,32 +194,35 @@ None identified by user.
    - languages (EN selected; any language with an installed voice is optional),
    - voice for each selected language (installed voices),
    - audience (release notes / sales / marketing),
-   - title (proposed from the description).
+   - title (proposed from the description),
+   - the app's base URL and, if it needs a login, the storageState path.
 3. Developer answers, or replies "defaults" to accept all.
 4. Claude Code explores the app, writes the script, renders, and reports the MP4 path(s).
-- **Error states:** No voice installed for a requested language → Claude Code reports it and offers the languages that have voices. `get_options` fails (config missing) → tool error naming the missing item.
+- **Error states:** No voice installed for a requested language → Claude Code reports it and offers the languages that have voices.
 - **Empty states:** No description passed → Claude Code asks what the demo should show before the other questions.
 
 ## 12. Functional Requirements
 
-### FR-001: Project config
+### FR-001: Demo target settings
 - **Implements:** BR-010, Constraints
-- **Description:** The system must load `screencaster.yaml` from the working directory (`/work` in Docker).
-- **Inputs / validation:**
+- **Description:** The system must read the target app, the login and the output location from the demo script itself. There is no project-level config file; a `screencaster.yaml` is never read.
+- **Inputs / validation:** Top-level script fields:
   - `baseUrl` (string, required, absolute http/https URL; e.g. `http://host.docker.internal:3000`)
-  - `storageState` (string, required, path relative to the working dir; the file must exist)
-  - `outputDir` (string, optional, default `output`)
+  - `storageState` (string, optional, path relative to the working dir and inside it; omit for a fresh, logged-out session; when given, the file must exist)
+  - `outputDir` (string, optional, relative to the working dir and inside it, default `output`)
   - `voices` (object, optional; keys are language codes, values are Piper voice names; built-in defaults: `en` → `en_US-ryan-high`, `pl` → `pl_PL-darkman-medium`)
-- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked.
+- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A missing storageState file → `/storageState: storageState not found: /work/auth/s.json`, reported together with the script and voice errors. A `storageState` or `outputDir` that resolves outside the working dir (`..` or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>` (same for `/storageState`), because the script is written by an LLM. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
 - **Acceptance criteria:**
-  - Given a config without `baseUrl`, when any render starts, then it fails before launching a browser with error `baseUrl is required`.
-  - Given a config without `voices`, when rendering `en`, then the audio uses `en_US-ryan-high`; when rendering `pl`, then it uses `pl_PL-darkman-medium`.
+  - Given a script without `baseUrl`, when any render starts, then it fails schema validation (`/baseUrl`) before launching a browser.
+  - Given a script without `voices`, when rendering `en`, then the audio uses `en_US-ryan-high`; when rendering `pl`, then it uses `pl_PL-darkman-medium`.
+  - Given a work dir that holds only the demo file, when a public site is rendered, then it succeeds with no storageState.
 
 ### FR-002: Script schema & validation
 - **Implements:** BR-001, BR-002, BR-010
 - **Description:** The system must parse the YAML script and validate it against a JSON Schema file (`core/script/script.schema.json`, embedded with `go:embed` in `core/script` and so compiled into both binaries) using `santhosh-tekuri/jsonschema`, before any browser or TTS work.
 - **Inputs / validation:**
   - `name` (string, required, `^[a-z0-9-]{1,64}$`; used in output filenames)
+  - `baseUrl` (string, required), `storageState` (string, optional), `outputDir` (string, optional): see FR-001
   - `languages` (array, optional, lowercase ISO 639-1 codes such as `en`, `pl`, `de`; default `["en"]`; overridable per render, BR-002)
   - `voices` (object, optional, keys are language codes, values Piper voice names; installed check per BR-011)
   - `meta` (object, optional: `title` ≤ 120 chars, `description` ≤ 500 chars, `audience` one of `release-notes | sales | marketing`)
@@ -254,8 +257,8 @@ None identified by user.
 - **Description:** For each selected language, the system must launch Chromium via playwright-go with a new context using:
   - viewport 1920×1080
   - `recordVideo` with size 1920×1080
-  - `storageState` from config
-  - `baseURL` from config
+  - `storageState` from the script (omitted: no stored session)
+  - `baseURL` from the script's `baseUrl`
 
   Each selected language is a separate recording, run sequentially in the order of `languages` (EN first by default), because narration lengths differ.
 - **Acceptance criteria:**
@@ -328,7 +331,7 @@ None identified by user.
 - **Implements:** BP-001, BR-008
 - **Description:** The `screencaster-mcp` binary (stdio transport, official `modelcontextprotocol/go-sdk`) must expose `render_video`.
   - **Input:** `{ "script": string, "languages"?: string[] }` (language codes); `script` is a path relative to the working dir, and `languages` overrides the script's `languages` (BR-002).
-  - **Validation:** It must validate config and script (FR-001, FR-002) synchronously.
+  - **Validation:** It must validate the script, its voices and its storageState (FR-001, FR-002) synchronously.
   - **On success:** It must insert a `queued` job and return `{ jobId, status: "queued", position }`.
   - **Tool description:** It must contain the full JSON Schema of the script format, an example script, and these rules: relative URLs only, narration text required for every selected language (`languages`, default `["en"]`), no login steps.
 - **Acceptance criteria:**
@@ -376,28 +379,27 @@ None identified by user.
 ### FR-017: MCP tool `explore_page`
 - **Implements:** BP-001, BR-010
 - **Description:** The `screencaster-mcp` server must expose `explore_page` so Claude Code can discover real selectors before writing a script.
-  - **Input:** `{ "url": string, "actions"?: Step[] }`. `url` is resolved like `goto` (BR-010). `actions` use the script step schema without `narration` (FR-002).
-  - **Behavior:** Launches a fresh, non-recorded Chromium context (1920×1080, storageState from config), navigates to `url`, runs `actions` in order with the FR-005 semantics and the 30 s timeout (no cursor animation, no typing delay), closes the browser, and returns the final page state.
+  - **Input:** `{ "url": string, "storageState"?: string, "actions"?: Step[] }`. `url` must be an absolute http(s) URL; the caller passes the demo's `baseUrl` joined with the path. `storageState` is a path relative to the working dir and inside it. `actions` use the script step schema without `narration` (FR-002). The `url` is also the base for relative `goto` URLs inside `actions` (BR-010).
+  - **Behavior:** Launches a fresh, non-recorded Chromium context (1920×1080, the given storageState or none), navigates to `url`, runs `actions` in order with the FR-005 semantics and the 30 s timeout (no cursor animation, no typing delay), closes the browser, and returns the final page state.
   - **Output:** `{ url, title, snapshot, truncated }`. `snapshot` is the page's accessibility tree as indented text. Each interactive element line includes its role, accessible name and a ready-to-use Playwright selector (e.g. `role=button[name="New project"]`). Capped at 50 000 characters (`truncated: true` if cut).
   - **Stateless:** Every call starts from a fresh context. To inspect a page deeper in a flow, the caller passes the `actions` that reach it.
   - **Independence:** Runs immediately, outside the render queue. Concurrent explore calls run one at a time.
-- **Edge cases:** An action fails or times out → tool error with step index, action, target and message (as FR-008), plus the snapshot of the page at the failure. A page with no accessible elements → empty snapshot, no error.
+- **Edge cases:** A relative `url` → tool error `url must be an absolute http or https URL: <url>`. A missing storageState file → tool error `storageState not found: <path>`. A `storageState` outside the working dir → tool error `storageState must stay inside the working directory: <value>`. An action fails or times out → tool error with step index, action, target and message (as FR-008), plus the snapshot of the page at the failure. A page with no accessible elements → empty snapshot, no error.
 - **Acceptance criteria:**
-  - Given the fixture app with a "New project" button, when `explore_page({ "url": "/projects" })` is called, then the snapshot contains `role=button[name="New project"]`.
+  - Given the fixture app with a "New project" button, when `explore_page` is called with the fixture's absolute `/projects` URL, then the snapshot contains `role=button[name="New project"]`.
   - Given `actions` that click a missing selector, when called, then a tool error names that step and includes the snapshot.
   - Given a selector returned by `explore_page`, when used in a script step, then the render executes that step successfully.
 
 ### FR-018: MCP tool `get_options`
 - **Implements:** BP-004, BR-011
 - **Description:** The `screencaster-mcp` server must expose `get_options` (no input) so Claude Code can offer real choices.
-  - **Output:** `{ languages, audiences, existingDemos, baseUrl }`:
-    - `languages` is `[{ code, selectedByDefault, defaultVoice, voices }]` for `en`, `pl` and every other language that has at least one installed voice. A voice's language code is the part of its name before the first `_` (`pl_PL-darkman-medium` → `pl`). `voices` lists the Piper voices for that language found in the image and in `/work/voices`. `defaultVoice` is resolved per BR-011 (config, then built-in), or `null` if none.
+  - **Output:** `{ languages, audiences, existingDemos }`:
+    - `languages` is `[{ code, selectedByDefault, defaultVoice, voices }]` for `en`, `pl` and every other language that has at least one installed voice. A voice's language code is the part of its name before the first `_` (`pl_PL-darkman-medium` → `pl`). `voices` lists the Piper voices for that language found in the image and in `/work/voices`. `defaultVoice` is resolved per BR-011 (built-in only), or `null` if none.
     - `audiences` is `["release-notes", "sales", "marketing"]`.
     - `existingDemos` is the `name` of every valid `demos/*.yaml` (invalid files are skipped).
-    - `baseUrl` is the config value.
-- **Edge cases:** Config missing → tool error `config not found: /work/screencaster.yaml`. `en` and `pl` always appear; one with no installed voice has `voices: []`.
+- **Edge cases:** `en` and `pl` always appear; one with no installed voice has `voices: []`.
 - **Acceptance criteria:**
-  - Given the stock image and a config without `voices`, when called, then `en` lists `en_US-ryan-high` as `defaultVoice`, `pl` lists `pl_PL-darkman-medium`, and only `en` has `selectedByDefault: true`.
+  - Given the stock image, when called, then `en` lists `en_US-ryan-high` as `defaultVoice`, `pl` lists `pl_PL-darkman-medium`, and only `en` has `selectedByDefault: true`.
   - Given an extra voice file `pl_PL-gosia-medium.onnx` in `/work/voices`, when called, then `pl.voices` includes `pl_PL-gosia-medium`.
   - Given a voice file `de_DE-thorsten-medium.onnx` in `/work/voices`, when called, then `languages` includes `de` with that voice and `defaultVoice: null`.
 
@@ -434,7 +436,7 @@ None identified by user.
 | error_json | TEXT | no | JSON `{step,lang,action,target,message}` | set on failure; `interrupted` uses `{message:"interrupted"}` |
 
 ### Files (no DB)
-- `screencaster.yaml` (config), `demos/*.yaml` (scripts), the storageState JSON, `<outputDir>/*.mp4`.
+- `demos/*.yaml` (scripts, each with its own target settings), the optional storageState JSON a script names, `<outputDir>/*.mp4`.
 - **Relations:** One job → zero or more MP4 files (one per selected language).
 - **Retention / deletion:** Forever; manual deletion only (BR-007).
 
@@ -488,7 +490,7 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | Testing | `go test` unit tests + 1 e2e render against a fixture HTML app (local, `make e2e`; not in CI) | — |
 
 - **Repo structure:** Go workspace (`go.work`, committed) with four modules:
-  - `core/` (config, script + `script.schema.json`, voices, TTS, recorder, assembler, renderer, explorer)
+  - `core/` (script + `script.schema.json`, voices, TTS, recorder, assembler, renderer, explorer)
   - `cli/` (`screencaster`)
   - `mcp/` (`screencaster-mcp`, queue, SQLite)
   - `tests/e2e/` (end-to-end tests, run locally with `make e2e`)
@@ -541,7 +543,7 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 12 | 16:9 1080p30 MP4 only | Vertical, square, 60 fps | User choice |
 | 13 | Slides and overlays post-MVP | In MVP | User choice |
 | 14 | Abort on step failure, 30 s timeout | Retry, skip | User choice |
-| 15 | Configurable baseUrl + storageState in a per-project config | Fixed env, login steps | User choice |
+| 15 | Configurable baseUrl + storageState in a per-project config (superseded by 58) | Fixed env, login steps | User choice |
 | 16 | No sensitive-data masking in MVP | Masking | User choice |
 | 17 | Actions goto/click/fill/select/press/hover/scroll/wait | Subset | User choice |
 | 18 | Narration starts with action; next step waits for clip | Action first, configurable | User choice |
@@ -562,12 +564,12 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 33 | Playwright recordVideo | CDP screencast | User choice; accepted lower bitrate |
 | 34 | go test + 1 e2e; GitHub Actions lint/test/docker build | Unit only, no CI | User choice |
 | 35 | Name: screencaster | demoforge, narrate, playreel | User choice |
-| 36 | Implementation defaults (not discussed): config filename `screencaster.yaml`, YAML field names, cursor 25 move steps, 60 ms/char typing, timestamp format, EN rendered before PL, jobs.db path, CLI bypasses queue | — | Chosen by Claude while writing; change freely |
+| 36 | Implementation defaults (not discussed): YAML field names, cursor 25 move steps, 60 ms/char typing, timestamp format, EN rendered before PL, jobs.db path, CLI bypasses queue | — | Chosen by Claude while writing; change freely |
 | 37 | explore_page: stateless, replays `actions` on each call, accessibility snapshot only (no screenshot), capped at 50 000 chars, runs outside the render queue | Stateful sessions, screenshots | Chosen by Claude; simplest, reuses the step executor |
 | 38 | Language precedence: render-time override > script `languages` > `["en"]` | Script-only setting | Chosen by Claude; lets "also in Polish" be a render-time request |
 | 39 | Slash command shipped as an MCP prompt (`create_demo`) inside screencaster-mcp (v1.2) | Per-project Claude Code skill file, plugin | User request; ships with the image and stays in sync with the schema; a plugin bundle can come later |
 | 40 | `get_options` tool feeds real voices/defaults/existing demos to the prompt | Hardcoded options in the prompt | Chosen by Claude; options are never stale |
-| 41 | Voice per script (`voices`), resolved script > config > built-in; extra voices via `/work/voices` | Config-only voices | Chosen by Claude; per-demo voice choice from the guided flow |
+| 41 | Voice per script (`voices`), resolved script > built-in (config level dropped by 60); extra voices via `/work/voices` | Config-only voices | Chosen by Claude; per-demo voice choice from the guided flow |
 | 42 | Guided flow asks once (batch, with defaults), no YAML approval; script `meta` also written to MP4 tags | Multi-step wizard, approval gate | Chosen by Claude; consistent with decision 8 |
 | 43 | Any language with an installed Piper voice is supported; EN and PL voices built into the image, others as files in `/work/voices`; no built-in default voice for other languages (v1.3) | Fixed EN + PL only, bundling many voices in the image | User approved; keeps the image small |
 | 44 | `explore_page` may overlap a running render (two Chromiums, CPU contention may jitter timing); no shared browser lock | Shared semaphore to serialize; reject explore during render | User choice. Offsets come from timestamps, so correctness holds. Revisit if timing jitter shows up. See ARCHITECTURE.md §6.2. |
@@ -582,6 +584,9 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 53 | `spf13/cobra` for the CLI | std `flag` | User choice; documented deviation from the KISS rule in CODE_QUALITY.md. |
 | 54 | e2e tests in their own module `tests/e2e`, run locally with `make e2e`, not in CI | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. Deviates from ARCHITECTURE.md §13. |
 | 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
+| 58 | Each demo is one self-contained YAML. `baseUrl` is required, `storageState` and `outputDir` are optional, and `screencaster.yaml` is removed (a warning is shown if one is present). Supersedes 15 | Optional `screencaster.yaml` fallback; paths relative to the demo file | User choice. No hidden project state; a public-site demo is one file and one command. Retargeting an environment means editing `baseUrl` (BR-010). |
+| 59 | `explore_page` takes an absolute `url` plus an optional `storageState`. The url is also the base for relative gotos in `actions` | Relative path plus a config `baseUrl` | User choice. No config to read; the explorer needs no change. |
+| 60 | No project-level voice defaults. Voice resolution is script, then built-in | Keep config `voices`; env-var defaults | Follows from 58. The script already carries per-demo `voices`, so a project level only added a second source. |
 
 ## 21. Open Questions
 None.
@@ -592,5 +597,5 @@ None.
 | Script | YAML file in `demos/` describing steps and narration for one demo. Sets `languages` (default `["en"]`) and other metadata. |
 | Step | One action plus optional `narration` (keyed by language code: `en`, `pl`, etc.). Narration text is required for every selected language. |
 | Job | One queued/running/completed render of a script, producing one MP4 per selected language. (Not limited to EN and PL; any language with an installed voice is rendered.) |
-| storageState | Playwright JSON file with cookies/localStorage used to start a logged-in session. Provided by config. |
+| storageState | Playwright JSON file with cookies/localStorage used to start a logged-in session. Named by the demo script (optional). |
 | Piper | Local open-source neural TTS engine. Voices and languages are pluggable via `/work/voices/*.onnx` files. |

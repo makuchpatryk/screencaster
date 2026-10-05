@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -82,13 +82,6 @@ func TestRun_exitCodeAndOutput(t *testing.T) { // FR-011
 			wantStderr: "another render is running\n",
 		},
 		{
-			name:       "config missing",
-			args:       []string{"render", "demos/a.yaml"},
-			err:        errors.New("config not found: /work/screencaster.yaml"),
-			wantCode:   1,
-			wantStderr: "config not found: /work/screencaster.yaml\n",
-		},
-		{
 			name:     "missing script argument",
 			args:     []string{"render"},
 			wantCode: 1,
@@ -107,6 +100,42 @@ func TestRun_exitCodeAndOutput(t *testing.T) { // FR-011
 				t.Errorf("stdout = %q, want %q", stdout.String(), tt.wantStdout)
 			}
 			if tt.wantStderr != "" && stderr.String() != tt.wantStderr {
+				t.Errorf("stderr = %q, want %q", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
+}
+
+func TestRun_warnsAboutScreencasterYAML(t *testing.T) { // decision 58
+	const warning = "screencaster.yaml is ignored; move its fields into the demo script\n"
+	tests := []struct {
+		name       string
+		hasConfig  bool
+		wantStderr string
+	}{
+		{"stray file is warned about", true, warning},
+		{"no file, no warning", false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.hasConfig {
+				if err := os.WriteFile(filepath.Join(dir, "screencaster.yaml"), []byte("baseUrl: http://x\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var called bool
+			fake := func(context.Context, renderer.Request) ([]renderer.Output, error) {
+				called = true
+				return nil, nil
+			}
+			var stderr bytes.Buffer
+
+			code := run(context.Background(), []string{"render", "demos/a.yaml"}, dir, fake, &bytes.Buffer{}, &stderr)
+			if code != 0 || !called {
+				t.Errorf("exit = %d, rendered = %v; the warning must not stop the render", code, called)
+			}
+			if stderr.String() != tt.wantStderr {
 				t.Errorf("stderr = %q, want %q", stderr.String(), tt.wantStderr)
 			}
 		})

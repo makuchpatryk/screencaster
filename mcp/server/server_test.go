@@ -23,6 +23,7 @@ import (
 )
 
 const validScript = `name: demo-one
+baseUrl: http://host.docker.internal:3000
 steps:
   - action: goto
     url: /projects
@@ -54,10 +55,12 @@ type env struct {
 	worker *queue.Worker
 	cs     *mcp.ClientSession
 	inst   voices.Installed
+	// launched records what the explorer's browser was opened with.
+	launched []explorer.LaunchOptions
 }
 
 // newEnv starts the server over the in-memory transport with a project dir
-// holding a valid config. The returned inst can be changed before the first
+// holding a storageState file. The returned inst can be changed before the first
 // call that reads voices.
 func newEnv(t *testing.T) *env {
 	t.Helper()
@@ -66,7 +69,6 @@ func newEnv(t *testing.T) *env {
 		"pl_PL-darkman-medium": "/v/pl",
 	}}
 	e.writeFile("auth/state.json", "{}")
-	e.writeFile("screencaster.yaml", "baseUrl: http://host.docker.internal:3000\nstorageState: auth/state.json\n")
 
 	var err error
 	e.store, err = queue.Open(filepath.Join(e.work, ".screencaster", "jobs.db"), time.Now)
@@ -79,7 +81,8 @@ func newEnv(t *testing.T) *env {
 	var n atomic.Int32
 	srv := New(Deps{
 		WorkDir: e.work, Store: e.store, Worker: e.worker,
-		Explorer: explorer.Explorer{Launch: func(context.Context, explorer.LaunchOptions) (explorer.Session, error) {
+		Explorer: explorer.Explorer{Launch: func(_ context.Context, o explorer.LaunchOptions) (explorer.Session, error) {
+			e.launched = append(e.launched, o)
 			return fakePage{}, nil
 		}},
 		Voices: func() (voices.Installed, error) { return e.inst, nil },
@@ -171,7 +174,7 @@ func TestServer_listsToolsAndPrompt(t *testing.T) {
 	for _, want := range []string{
 		strings.TrimSpace(string(script.SchemaJSON()))[:20],
 		"name: create-project",
-		"relative to baseUrl",
+		"relative to the script's `baseUrl`",
 		"narration text for every selected language",
 		"No login steps",
 	} {
@@ -213,18 +216,28 @@ func TestRenderVideo_invalidScriptIsToolErrorAndNoRow(t *testing.T) {
 	}
 }
 
-func TestRenderVideo_missingScriptAndConfigAreToolErrors(t *testing.T) {
+func TestRenderVideo_missingScriptIsToolError(t *testing.T) {
 	e := newEnv(t)
 	if res := e.call(t, "render_video", map[string]any{"script": "demos/none.yaml"}); !res.IsError || !strings.Contains(text(res), "script not found") {
 		t.Errorf("missing script: %v %q", res.IsError, text(res))
 	}
-	if err := os.Remove(filepath.Join(e.work, "screencaster.yaml")); err != nil {
-		t.Fatal(err)
-	}
+}
+
+// Decision 58: the work dir holds the demo and nothing else, and the
+// storageState check runs at submit time with no job row on failure.
+func TestRenderVideo_needsNoProjectConfig(t *testing.T) {
+	e := newEnv(t)
 	e.writeFile("demos/ok.yaml", validScript)
-	want := "config not found: " + filepath.Join(e.work, "screencaster.yaml")
-	if res := e.call(t, "render_video", map[string]any{"script": "demos/ok.yaml"}); !res.IsError || text(res) != want {
-		t.Errorf("missing config: %v %q, want %q", res.IsError, text(res), want)
+	e.writeFile("demos/login.yaml", strings.Replace(validScript, "steps:", "storageState: auth/gone.json\nsteps:", 1))
+
+	out := decode[renderOut](t, e.call(t, "render_video", map[string]any{"script": "demos/ok.yaml"}))
+	if out.Position != 1 {
+		t.Errorf("render without screencaster.yaml = %+v, want queued at 1", out)
+	}
+	res := e.call(t, "render_video", map[string]any{"script": "demos/login.yaml"})
+	want := "/storageState: storageState not found: " + filepath.Join(e.work, "auth/gone.json")
+	if !res.IsError || text(res) != want {
+		t.Errorf("missing storageState: %v %q, want %q", res.IsError, text(res), want)
 	}
 }
 
@@ -348,8 +361,12 @@ func TestGetOptions(t *testing.T) {
 		if !slices.Equal(o.ExistingDemo, []string{"demo-one"}) {
 			t.Errorf("existingDemos = %v, want only the valid demo", o.ExistingDemo)
 		}
-		if o.BaseURL != "http://host.docker.internal:3000" {
-			t.Errorf("baseUrl = %q", o.BaseURL)
+		raw, err := json.Marshal(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "baseUrl") {
+			t.Errorf("get_options has no baseUrl any more (decision 58): %s", raw)
 		}
 	})
 
@@ -373,30 +390,19 @@ func TestGetOptions(t *testing.T) {
 			t.Errorf("en = %+v, want empty voices", en)
 		}
 	})
-
-	t.Run("config missing", func(t *testing.T) {
-		e := newEnv(t)
-		if err := os.Remove(filepath.Join(e.work, "screencaster.yaml")); err != nil {
-			t.Fatal(err)
-		}
-		res := e.call(t, "get_options", map[string]any{})
-		if want := "config not found: " + filepath.Join(e.work, "screencaster.yaml"); !res.IsError || text(res) != want {
-			t.Errorf("got %v %q, want %q", res.IsError, text(res), want)
-		}
-	})
 }
 
 // FR-017 acceptance criteria 1 and 2 (3 is the e2e test).
 func TestExplorePage(t *testing.T) {
 	e := newEnv(t)
 
-	out := decode[exploreOut](t, e.call(t, "explore_page", map[string]any{"url": "/projects"}))
+	out := decode[exploreOut](t, e.call(t, "explore_page", map[string]any{"url": "http://app/projects"}))
 	if !strings.Contains(out.Snapshot, `role=button[name="New project"]`) || out.Title != "Projects" {
 		t.Errorf("explore = %+v", out)
 	}
 
 	res := e.call(t, "explore_page", map[string]any{
-		"url":     "/projects",
+		"url":     "http://app/projects",
 		"actions": []map[string]any{{"action": "click", "selector": "#missing"}},
 	})
 	msg := text(res)
@@ -404,9 +410,73 @@ func TestExplorePage(t *testing.T) {
 		t.Errorf("failing action: %v %q, want step, action, target and snapshot", res.IsError, msg)
 	}
 
-	res = e.call(t, "explore_page", map[string]any{"url": "/", "actions": []map[string]any{{"action": "click"}}})
+	res = e.call(t, "explore_page", map[string]any{"url": "http://app/", "actions": []map[string]any{{"action": "click"}}})
 	if !res.IsError || !strings.Contains(text(res), "/steps/0") {
 		t.Errorf("invalid action: %v %q", res.IsError, text(res))
+	}
+}
+
+// Decision 59: the url is absolute; a relative one is a tool error that names
+// the rule, and no browser is opened.
+func TestExplorePage_relativeURLIsToolError(t *testing.T) {
+	e := newEnv(t)
+	res := e.call(t, "explore_page", map[string]any{"url": "/projects"})
+	if want := "url must be an absolute http or https URL: /projects"; !res.IsError || text(res) != want {
+		t.Errorf("relative url: %v %q, want %q", res.IsError, text(res), want)
+	}
+	if len(e.launched) != 0 {
+		t.Errorf("a browser was launched for an invalid url: %+v", e.launched)
+	}
+}
+
+func TestExplorePage_storageState(t *testing.T) {
+	e := newEnv(t)
+	tests := []struct {
+		name         string
+		storageState string
+		wantErr      string
+		wantLaunched string
+	}{
+		{"omitted means a logged-out session", "", "", ""},
+		{"resolved against the project dir", "auth/state.json", "", filepath.Join(e.work, "auth/state.json")},
+		{"missing file", "auth/gone.json", "storageState not found: " + filepath.Join(e.work, "auth/gone.json"), ""},
+		{"parent dir is refused", "../auth/state.json", "storageState must stay inside the working directory: ../auth/state.json", ""},
+		{"absolute path elsewhere is refused", "/etc/passwd", "storageState must stay inside the working directory: /etc/passwd", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e.launched = nil
+			args := map[string]any{"url": "http://app/projects"}
+			if tt.storageState != "" {
+				args["storageState"] = tt.storageState
+			}
+			res := e.call(t, "explore_page", args)
+			if tt.wantErr != "" {
+				if !res.IsError || text(res) != tt.wantErr {
+					t.Errorf("got %v %q, want error %q", res.IsError, text(res), tt.wantErr)
+				}
+				if len(e.launched) != 0 {
+					t.Errorf("a browser was launched despite the error: %+v", e.launched)
+				}
+				return
+			}
+			if res.IsError || len(e.launched) != 1 {
+				t.Fatalf("got %v %q, launched %+v", res.IsError, text(res), e.launched)
+			}
+			if got := e.launched[0].StorageState; got != tt.wantLaunched {
+				t.Errorf("explorer StorageState = %q, want %q", got, tt.wantLaunched)
+			}
+		})
+	}
+}
+
+// The url is also the base, so a relative goto in actions resolves against
+// the page being explored (decision 59).
+func TestExplorePage_urlIsTheBase(t *testing.T) {
+	e := newEnv(t)
+	decode[exploreOut](t, e.call(t, "explore_page", map[string]any{"url": "http://app:3000/projects"}))
+	if len(e.launched) != 1 || e.launched[0].BaseURL != "http://app:3000/projects" {
+		t.Errorf("launched = %+v, want BaseURL == url", e.launched)
 	}
 }
 
@@ -470,7 +540,7 @@ func TestHandlers_writeNothingToStdout(t *testing.T) {
 	e.call(t, "render_video", map[string]any{"script": "demos/none.yaml"})
 	e.call(t, "get_render_status", map[string]any{"jobId": "job-a"})
 	e.call(t, "get_options", map[string]any{})
-	e.call(t, "explore_page", map[string]any{"url": "/"})
+	e.call(t, "explore_page", map[string]any{"url": "http://app/"})
 	if _, err := e.cs.GetPrompt(context.Background(), &mcp.GetPromptParams{Name: "create_demo"}); err != nil {
 		t.Fatal(err)
 	}

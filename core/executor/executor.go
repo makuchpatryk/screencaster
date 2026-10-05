@@ -57,7 +57,7 @@ type Executor struct {
 }
 
 // New returns an executor that resolves relative goto URLs against baseURL
-// (BR-010). baseURL is an absolute URL validated by core/config.
+// (BR-010). baseURL is an absolute URL validated by script.Parse.
 func New(p Page, baseURL string, m Mode) (*Executor, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {

@@ -8,7 +8,7 @@ This document describes *how* screencaster is built. *What* it does is in the PR
 
 | Driver | Source | Architectural consequence |
 |--------|--------|---------------------------|
-| Re-render must be deterministic, no LLM at render time | BR-001 | Render engine is a pure function of (script, config, voices, target app). Claude Code only authors YAML. |
+| Re-render must be deterministic, no LLM at render time | BR-001 | Render engine is a pure function of (script, voices, target app). Claude Code only authors YAML. |
 | Narration and action start together; next step waits for both | BR-003, FR-007 | Audio is not played live. Clips are placed on a timeline by recorded offsets and mixed offline. |
 | Any step failure aborts everything, no partial output | BR-004, FR-008, FR-010 | Work in a temp dir, move outputs only after all languages succeed. |
 | Offline, $0 | NFR-003, §9 | No HTTP clients in code. Chromium is the only network user. |
@@ -52,8 +52,7 @@ Go workspace (`go.work`, committed, Decision 51), four modules (Decisions 29, 54
 
 ```
 core/                      library, no MCP, no SQLite
-  config/                  screencaster.yaml load + validate          FR-001
-  script/                  types, embedded JSON Schema, cross-field    FR-002
+  script/                  types, embedded JSON Schema, cross-field    FR-001, FR-002
   voices/                  discover installed voices, resolve per lang BR-011, FR-018
   tts/                     Piper wrapper, WAV duration                 FR-003
   browser/                 playwright-go wrapper: launch, context      FR-004
@@ -93,14 +92,14 @@ The JSON Schema lives next to the code that embeds it: `core/script/script.schem
 sequenceDiagram
     participant C as Caller (CLI / worker)
     participant R as renderer
-    participant V as script+config+voices
+    participant V as script+voices
     participant T as tts (Piper)
     participant B as recorder + executor (Chromium)
     participant A as assembler (ffmpeg)
     participant FS as outputDir
 
     C->>R: Render(script, langOverride)
-    R->>V: load config, parse+validate script, resolve langs & voices
+    R->>V: parse+validate script, resolve langs & voices, check storageState
     V-->>R: plan (or ValidationErrors, nothing started)
     loop each language, in order
         R->>T: synthesize clip per narrated step
@@ -116,7 +115,7 @@ sequenceDiagram
 
 Rules:
 
-1. **Validate first.** Config, schema, narration-per-language, voice installed. All before any browser or TTS work (FR-001, FR-002, BR-011).
+1. **Validate first.** Schema, baseUrl, narration-per-language, voice installed, storageState file, `storageState` and `outputDir` inside the working directory. All before any browser or TTS work (FR-001, FR-002, BR-011).
 2. **Languages run sequentially**, each from a fresh browser context (FR-004).
 3. **TTS before browser** for each language, because clip durations decide step timing (FR-003).
 4. **Abort path.** First step error cancels the context, closes the browser, deletes the job temp dir and returns a `Failure`. Nothing reaches `outputDir`. If `en` succeeded and `pl` fails, the `en` MP4 is discarded too (BR-004).
@@ -198,13 +197,13 @@ type Mode struct { Visuals bool }
 func (e *Executor) Run(ctx context.Context, i int, s script.Step) error // returns *failure.StepFailure
 ```
 
-Same selectors, same URL resolution against `baseUrl` (BR-010), same error shape. That is the guarantee behind FR-017 AC3: *a selector returned by `explore_page` works in a render*.
+Same selectors, same URL resolution against the script's `baseUrl` (BR-010), same error shape. That is the guarantee behind FR-017 AC3: *a selector returned by `explore_page` works in a render*.
 
 **Selector strictness.** A selector matching several elements must fail, not silently click the first one. Executor uses strict locators. `explore_page` therefore emits only selectors that match exactly one element, and adds `>> nth=N` when names collide.
 
 ## 8. `explore_page` design
 
-- Fresh non-recorded context: 1920×1080, `storageState`, `baseURL` (FR-017).
+- Fresh non-recorded context: 1920×1080, `storageState` and `baseURL` from the tool input (FR-017). `baseURL` is the absolute `url` itself, so a relative `goto` in `actions` resolves against the explored page (decision 59).
 - Replays `actions` with executor in `explore` mode, then captures the page.
 - Snapshot source: Playwright ARIA snapshot (`Locator.AriaSnapshot` on `body`), lines like `- button "New project"`, `- textbox "Name": Demo`, `- option "Public" [selected]`, indented by nesting (spike S4, §17). The explorer appends ` -> role=<role>[name="<name>"]` right after the name and attributes of every named line whose role is interactive (button, link, textbox, checkbox, radio, combobox, menuitem, tab, option). It checks uniqueness with a `Count` call against the live page and adds ` >> nth=<i>` on a collision, `i` counting the earlier lines with the same selector (ADR-47).
 - Output capped at 50 000 chars with `truncated: true`.
@@ -227,7 +226,7 @@ type Failure struct {
 
 | Kind | Produced by | Message format | CLI | MCP |
 |------|-------------|----------------|-----|-----|
-| Validation | config, script, voices | list of `{pointer, message}` | print, exit 1 | tool error, no job created |
+| Validation | script, voices, renderer (paths) | list of `{pointer, message}` | print, exit 1 | tool error, no job created |
 | Step | executor | BR-004 fields | print, exit 1 | `jobs.error_json` |
 | TTS | tts | `tts failed at step <n> (<lang>): <stderr>` | print, exit 1 | `error_json.message` |
 | Assembly | assembler | `assembly failed (<lang>): <last 20 stderr lines>` | print, exit 1 | `error_json.message` |
@@ -259,9 +258,8 @@ stateDiagram-v2
 
 ```
 /work                          mounted project (rw)
-├── screencaster.yaml          config (FR-001)
-├── demos/*.yaml               scripts
-├── auth/storageState.json     path from config; contains secrets
+├── demos/*.yaml               scripts, each with its own baseUrl, storageState, outputDir (FR-001)
+├── auth/storageState.json     path from the demo's storageState; optional; contains secrets
 ├── voices/*.onnx(+.json)      extra Piper voices (FR-016)
 ├── output/                    <name>.<lang>.<ts>.mp4  (never overwritten)
 └── .screencaster/
@@ -279,7 +277,7 @@ stateDiagram-v2
 - Base: Debian slim with Chromium system deps (installed through the playwright-go driver install step).
 - Contents: `screencaster`, `screencaster-mcp`, Playwright Node driver + Chromium, Piper binary (`/opt/piper/piper`, release 2023.11.14-2, libs and espeak-ng data next to it), voices `en_US-ryan-high` and `pl_PL-darkman-medium` under `/opt/piper/voices`, `ffmpeg`/`ffprobe` (FR-016). Piper and the voices are sha256-pinned.
 - Voice discovery scans `/opt/piper/voices` and `/work/voices`. The language code is the voice name up to the first `_` (FR-018).
-- Network: `--add-host=host.docker.internal:host-gateway` makes `baseUrl` reach the host app on Linux (Decision 27).
+- Network: `--add-host=host.docker.internal:host-gateway` makes a demo's `baseUrl` reach the host app on Linux (Decision 27).
 - **Stdio hygiene.** MCP uses stdout for protocol frames. All logging goes to stderr. Subprocess stdout/stderr (Piper, ffmpeg, Playwright driver) is captured and never inherited. A stray byte on stdout corrupts the session.
 - Image build is multi-stage: `piper` (Piper + voices, shared with `dev`), `dev` (toolchain for `make`), `build` (static `screencaster` and `screencaster-mcp`, plus the playwright CLI at the version `core/go.mod` pins), `runtime` (last, so `docker build .` yields it). `runtime` is `debian:bookworm-slim` + Chromium (via `playwright install --with-deps`) + ffmpeg + Piper + both binaries in `/usr/local/bin`.
 - The runtime image runs as root with `WORKDIR /work`, so output files in the mounted project are owned by root. Use `docker run --init` so SIGTERM reaches the process (§6.4).
@@ -289,7 +287,7 @@ stateDiagram-v2
 
 | Level | Scope | Tools |
 |-------|-------|-------|
-| Unit | config, schema, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler` |
+| Unit | schema, baseUrl and storageState checks, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler` |
 | Integration | SQLite store, lock file semantics, MCP tool/prompt wiring via in-memory transport | `go test` |
 | E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | `make e2e` in the dev image, locally (Decision 54); `make e2e-runtime` runs the CLI tests against the runtime image (Decision 56) |
 
@@ -311,7 +309,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PRD log; 56 and 57 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55 and 58–60 are also in the PRD log; 56 and 57 are only here.
 
 | # | Decision | Alternatives | Rationale |
 |---|----------|--------------|-----------|
@@ -329,6 +327,9 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 are also in the PR
 | 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
 | 56 | `make e2e-runtime`: the e2e test binary is compiled in the dev image and runs inside the runtime image, with `SCREENCASTER_BIN` pointing at the image's binary; the test process serves the fixture on 127.0.0.1 | CLI binary in the image, fixture in the dev container over a docker network (the original M4 plan) | Same coverage of the image's binary, Chromium, Piper and ffmpeg. No network, no docker-in-docker, nothing to orchestrate. |
 | 57 | Job timestamps use a fixed-width UTC layout with 9 fraction digits, not `RFC3339Nano` | `RFC3339Nano` | `RFC3339Nano` trims trailing zeros, so `…05Z` sorts after `…05.1Z` as text and breaks the `ORDER BY created_at`. Still valid RFC 3339. |
+| 58 | Each demo is one self-contained YAML: `baseUrl` required, `storageState` and `outputDir` optional, `screencaster.yaml` and `core/config` removed (a warning names a stray file: CLI on every render, MCP once at startup). Supersedes PRD decision 15 | Optional `screencaster.yaml` fallback; paths relative to the demo file; a slim `core/config` for path helpers | User choice. No hidden project state. The URL rule (`script.AbsoluteHTTP`) lives in Go, the field shape in the schema. The storageState check and the rule that `storageState` and `outputDir` stay inside the working directory live in `core/renderer` (`Prepare`, and `StorageStatePath` shared with `explore_page`), which already does file I/O; the script and the tool input are LLM-written, so their paths are not trusted. |
+| 59 | `explore_page` takes an absolute `url` plus an optional `storageState`; the url is also the explorer's `BaseURL` | Path plus a `baseUrl` input | Nothing to read from disk. Relative gotos in `actions` resolve against the explored page, so `core/explorer` and `core/executor` stay unchanged. |
+| 60 | No project-level voice defaults: script, then built-in | Keep config voices; env-var defaults | Follows from 58. `voices.Resolve` and `Options` lose the config parameter. |
 
 ## 17. Open items for spikes
 

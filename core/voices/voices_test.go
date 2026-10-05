@@ -65,7 +65,6 @@ func TestResolve(t *testing.T) {
 		name    string
 		langs   []string
 		script  map[string]string
-		cfg     map[string]string
 		inst    Installed
 		want    map[string]string
 		wantErr string
@@ -77,26 +76,18 @@ func TestResolve(t *testing.T) {
 			want:  map[string]string{"en": "/v/en_US-ryan-high.onnx", "pl": "/v/pl_PL-darkman-medium.onnx"},
 		},
 		{
-			name:  "config beats built-in",
-			langs: []string{"pl"},
-			cfg:   map[string]string{"pl": "pl_PL-gosia-medium"},
-			inst:  inst,
-			want:  map[string]string{"pl": "/v/pl_PL-gosia-medium.onnx"},
-		},
-		{
-			name:   "script beats config",
+			name:   "script beats built-in",
 			langs:  []string{"pl"},
-			script: map[string]string{"pl": "pl_PL-darkman-medium"},
-			cfg:    map[string]string{"pl": "pl_PL-gosia-medium"},
+			script: map[string]string{"pl": "pl_PL-gosia-medium"},
 			inst:   inst,
-			want:   map[string]string{"pl": "/v/pl_PL-darkman-medium.onnx"},
+			want:   map[string]string{"pl": "/v/pl_PL-gosia-medium.onnx"},
 		},
 		{
-			name:  "language without built-in works when configured",
-			langs: []string{"de"},
-			cfg:   map[string]string{"de": "de_DE-thorsten"},
-			inst:  inst,
-			want:  map[string]string{"de": "/v/de_DE-thorsten.onnx"},
+			name:   "language without built-in works when the script names a voice",
+			langs:  []string{"de"},
+			script: map[string]string{"de": "de_DE-thorsten"},
+			inst:   inst,
+			want:   map[string]string{"de": "/v/de_DE-thorsten.onnx"},
 		},
 		{
 			name:    "language without any voice fails",
@@ -111,11 +102,11 @@ func TestResolve(t *testing.T) {
 			wantErr: "voice not installed: en_US-ryan-high",
 		},
 		{
-			name:  "unselected languages are not checked",
-			langs: []string{"en"},
-			cfg:   map[string]string{"pl": "pl_PL-missing"},
-			inst:  Installed{"en_US-ryan-high": "/v/en.onnx"},
-			want:  map[string]string{"en": "/v/en.onnx"},
+			name:   "unselected languages are not checked",
+			langs:  []string{"en"},
+			script: map[string]string{"pl": "pl_PL-missing"},
+			inst:   Installed{"en_US-ryan-high": "/v/en.onnx"},
+			want:   map[string]string{"en": "/v/en.onnx"},
 		},
 		{
 			name:    "reports every failing language",
@@ -126,7 +117,7 @@ func TestResolve(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, errs := Resolve(tt.langs, tt.script, tt.cfg, tt.inst)
+			got, errs := Resolve(tt.langs, tt.script, tt.inst)
 			if tt.wantErr != "" {
 				if len(errs) == 0 || errs.Error() != tt.wantErr {
 					t.Fatalf("Resolve() errors = %q, want %q", errs.Error(), tt.wantErr)
@@ -159,31 +150,25 @@ func TestOptions(t *testing.T) {
 	tests := []struct {
 		name string
 		inst Installed
-		cfg  map[string]string
 		want []Option
 	}{
-		{"stock image", stock, nil, []Option{
+		{"stock image", stock, []Option{
 			{"en", true, "en_US-ryan-high", []string{"en_US-ryan-high"}},
 			{"pl", false, "pl_PL-darkman-medium", []string{"pl_PL-darkman-medium"}},
 		}},
-		{"extra pl voice and a language without default", withExtras, nil, []Option{
+		{"extra pl voice and a language without default", withExtras, []Option{
 			{"de", false, "", []string{"de_DE-thorsten-medium"}},
 			{"en", true, "en_US-ryan-high", []string{"en_US-ryan-high"}},
 			{"pl", false, "pl_PL-darkman-medium", []string{"pl_PL-darkman-medium", "pl_PL-gosia-medium"}},
 		}},
-		{"config voice beats built-in", withExtras, map[string]string{"pl": "pl_PL-gosia-medium", "de": "de_DE-thorsten-medium"}, []Option{
-			{"de", false, "de_DE-thorsten-medium", []string{"de_DE-thorsten-medium"}},
-			{"en", true, "en_US-ryan-high", []string{"en_US-ryan-high"}},
-			{"pl", false, "pl_PL-gosia-medium", []string{"pl_PL-darkman-medium", "pl_PL-gosia-medium"}},
-		}},
-		{"en and pl always listed, default needs an installed voice", Installed{}, nil, []Option{
+		{"en and pl always listed, default needs an installed voice", Installed{}, []Option{
 			{"en", true, "", []string{}},
 			{"pl", false, "", []string{}},
 		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Options(tt.inst, tt.cfg); !reflect.DeepEqual(got, tt.want) {
+			if got := Options(tt.inst); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Options() = %+v\nwant %+v", got, tt.want)
 			}
 		})

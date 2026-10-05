@@ -21,16 +21,12 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
    - The container runs as root: files in `output/` belong to root.
    - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
 
-3. **Configure** your project (`screencaster.yaml`):
-   ```yaml
-   baseUrl: http://host.docker.internal:3000
-   storageState: auth/storageState.json
-   outputDir: output
-   ```
-
-4. **Write a demo** (`demos/my-demo.yaml`):
+3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. Paths are relative to the working directory (`/work` in Docker):
    ```yaml
    name: my-demo
+   baseUrl: http://host.docker.internal:3000   # required, absolute http(s) URL
+   storageState: auth/storageState.json        # optional; omit for a public site
+   outputDir: output                           # optional, default output
    languages: [en, pl]
    meta:
      title: How to create a project
@@ -47,8 +43,9 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
        selector: input[name="name"]
        value: My Project
    ```
+   A demo for a public site is just `name`, `baseUrl` and `steps`: no other file is needed. A `screencaster.yaml` from an earlier version is ignored (with a warning); move its fields into the demo.
 
-5. **Render**:
+4. **Render**:
    - CLI: `screencaster render demos/my-demo.yaml`
    - MCP (in Claude Code): describe what you want, Claude writes the YAML and renders
 
@@ -94,7 +91,7 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 
 - `demos/*.yaml` — stored demo scripts (created via chat or CLI)
 - `output/*.mp4` — rendered videos, never overwritten (BR-006, FR-010)
-- `auth/storageState.json` — logged-in session state for the target app (add to `.gitignore`)
+- the file named by a demo's `storageState` (for example `auth/storageState.json`) — optional logged-in session state for the target app (add to `.gitignore`)
 
 ## Key constraints
 
@@ -111,7 +108,7 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 
 ## Claude Code (MCP)
 
-`screencaster-mcp` runs inside the image and talks to Claude Code over stdio. Add it to the project's `.mcp.json`, with `<project>` the absolute path of the repo that holds `screencaster.yaml`:
+`screencaster-mcp` runs inside the image and talks to Claude Code over stdio. Add it to the project's `.mcp.json`, with `<project>` the absolute path of the repo that holds `demos/`:
 
 ```json
 {
@@ -125,8 +122,8 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 }
 ```
 
-- Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `get_render_status`, `explore_page` (accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
-- Prompt: `/mcp__screencaster__create_demo [description]` asks for languages, voices, audience and title in one message, explores the app, writes `demos/<name>.yaml` and renders it.
+- Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `get_render_status`, `explore_page` (takes an absolute `url` and an optional `storageState`; returns the accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
+- Prompt: `/mcp__screencaster__create_demo [description]` asks for languages, voices, audience, title, base URL and login (if any) in one message, explores the app, writes `demos/<name>.yaml` and renders it.
 - Jobs run one at a time, oldest first, and are kept in `.screencaster/jobs.db`. Jobs still queued or running when the server stops are marked `failed` with `interrupted` at the next start; they do not resume.
 - A CLI render and a queued job never run together: both take `.screencaster/render.lock`, and a job waits for it while still `queued`.
 - `explore_page` does not wait for the queue and may overlap a running render, which can make the video's pacing jitter.

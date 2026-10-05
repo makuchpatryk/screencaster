@@ -60,14 +60,14 @@ func Lang(voice string) string {
 	return code
 }
 
-// Resolve picks the voice for each of langs in priority order: script, config,
+// Resolve picks the voice for each of langs in priority order: script, then
 // built-in (BR-011). It returns the model path per language, or every
 // language that has no voice or an uninstalled one.
-func Resolve(langs []string, scriptVoices, cfgVoices map[string]string, inst Installed) (map[string]string, failure.ValidationErrors) {
+func Resolve(langs []string, scriptVoices map[string]string, inst Installed) (map[string]string, failure.ValidationErrors) {
 	paths := make(map[string]string, len(langs))
 	var errs failure.ValidationErrors
 	for _, lang := range langs {
-		name := firstNonEmpty(scriptVoices[lang], cfgVoices[lang], builtin[lang])
+		name := firstNonEmpty(scriptVoices[lang], builtin[lang])
 		if name == "" {
 			errs = append(errs, failure.ValidationError{Message: "no voice for language: " + lang})
 			continue
@@ -104,10 +104,9 @@ type Option struct {
 }
 
 // Options lists en, pl and every other language with an installed voice,
-// sorted by code. The default voice follows BR-011 (config, then built-in)
-// and counts only when it is installed, because Resolve would reject it
-// otherwise.
-func Options(inst Installed, cfgVoices map[string]string) []Option {
+// sorted by code. The default voice is the built-in one (BR-011) and counts
+// only when it is installed, because Resolve would reject it otherwise.
+func Options(inst Installed) []Option {
 	byLang := map[string][]string{}
 	for lang := range builtin {
 		byLang[lang] = nil
@@ -122,7 +121,7 @@ func Options(inst Installed, cfgVoices map[string]string) []Option {
 	opts := make([]Option, 0, len(byLang))
 	for lang, names := range byLang {
 		slices.Sort(names)
-		def := firstNonEmpty(cfgVoices[lang], builtin[lang])
+		def := builtin[lang]
 		if _, ok := inst[def]; !ok {
 			def = ""
 		}

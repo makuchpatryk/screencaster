@@ -1,4 +1,5 @@
 name: My Demo
+baseUrl: http://host.docker.internal:3000
 steps:
   - action: goto
     url: /
