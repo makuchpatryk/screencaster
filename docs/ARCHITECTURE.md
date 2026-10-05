@@ -1,19 +1,19 @@
 # screencaster — Architecture
 
-**Version:** 0.1 | **Date:** 2026-10-03 | **Based on:** [PRD v1.3](PRD.md) | **Code rules:** [CODE_QUALITY.md](CODE_QUALITY.md) | **Status:** Draft
+**Version:** 0.2 | **Date:** 2026-10-05 | **Based on:** [PRD v1.3](PRD.md) | **Code rules:** [CODE_QUALITY.md](CODE_QUALITY.md) | **Status:** Draft
 
-This document describes *how* screencaster is built. *What* it does is in the PRD. Requirement IDs (BR-, FR-, NFR-, BP-, UF-) link back to it.
+This document holds the structural rules: how the code is divided, what may depend on what, and the invariants the render pipeline keeps. *What* the product does is in the PRD; constants, formats and measurements live in the code and its tests. Requirement IDs (BR-, FR-, NFR-, BP-) link back to the PRD.
 
 ## 1. Context and design drivers
 
-| Driver | Source | Architectural consequence |
-|--------|--------|---------------------------|
-| Re-render must be deterministic, no LLM at render time | BR-001 | Render engine is a pure function of (script, voices, target app). Claude Code only authors YAML. |
-| Narration and action start together; next step waits for both | BR-003, FR-007 | Audio is not played live. Clips are placed on a timeline by recorded offsets and mixed offline. |
-| Any step failure aborts everything, no partial output | BR-004, FR-008, FR-010 | Work in a temp dir, move outputs only after all languages succeed. |
-| Offline, $0 | NFR-003, §9 | No HTTP clients in code. Chromium is the only network user. |
-| One developer, ≤ 10 videos/month | §9 | Few moving parts. One process, one worker, SQLite file. No scale design. |
-| Same selectors in explore and render | Decision 23 | One step executor shared by both. |
+| Driver | Source | Consequence |
+|--------|--------|-------------|
+| Re-render is deterministic, no LLM at render time | BR-001 | The render engine is a pure function of (script, voices, target app). Claude Code only authors YAML. |
+| Narration and action start together; the next step waits for both | BR-003, FR-007 | Audio is never played live. Clips are placed on a timeline by recorded offsets and mixed offline. |
+| Any step failure aborts everything, no partial output | BR-004, FR-008, FR-010 | Work in a temp dir, publish only after every language succeeded. |
+| Offline, $0 | NFR-003 | No HTTP clients in code. Chromium is the only network user. |
+| One developer, few videos | PRD §9 | Few moving parts: one process, one worker, one SQLite file. No scale design. |
+| Same selectors in explore and render | Decision 23 | One step executor serves both. |
 
 Non-goals: multi-tenancy, parallel rendering, auth, any UI (PRD §10.3).
 
@@ -44,50 +44,47 @@ flowchart LR
     Chromium -- host.docker.internal --> App
 ```
 
-Two entry points (`screencaster`, `screencaster-mcp`) are thin shells over one library (`core`). They share no code except through `core`.
+Two entry points are thin shells over one library (`core`). They share code only through `core`.
 
 ## 3. Module view
 
-Go workspace (`go.work`, committed, Decision 51), four modules (Decisions 29, 54).
+Go workspace (`go.work`, committed), four modules.
 
 ```
 core/                      library, no MCP, no SQLite
-  script/                  types, embedded JSON Schema, cross-field    FR-001, FR-002
-  voices/                  discover installed voices, resolve per lang BR-011, FR-018
-  tts/                     Piper wrapper, WAV duration                 FR-003
-  browser/                 playwright-go wrapper: launch, context, card screenshots   FR-004
-  card/                    built-in start/end card page and closing line   FR-009
-  executor/                step execution (two modes)                  FR-005, FR-006
-  recorder/                run one language: clips + steps -> webm + offsets   FR-004, FR-007
-  assembler/               ffmpeg mix + cards + transcode + mux + tags FR-009
-  renderer/                orchestrator: validate -> per-lang -> publish   FR-008, FR-010
-  explorer/                explore_page logic                          FR-017
-  lock/                    flock-based render lock                     see 6.3
-  failure/                 error types                                 see 9
-cli/                       screencaster render ...  (cobra)            FR-011
+  script/                  types, embedded JSON Schema, cross-field rules   FR-001, FR-002
+  voices/                  discover installed voices, resolve per language  BR-011, FR-018
+  tts/                     Piper wrapper, WAV duration                      FR-003
+  browser/                 playwright-go wrapper: launch, context, screenshots   FR-004
+  card/                    built-in start/end card page                     FR-009
+  executor/                step execution (two modes)                       FR-005, FR-006
+  recorder/                one language: clips + steps -> webm + offsets    FR-004, FR-007
+  assembler/               ffmpeg: mix, cards, transcode, mux, tags         FR-009
+  renderer/                orchestrator: validate -> per language -> publish   FR-008, FR-010
+  explorer/                explore_page logic                               FR-017
+  lock/                    flock-based render lock                          §6.3
+  failure/                 error types                                      §9
+cli/                       screencaster render ...                          FR-011
 mcp/
-  server/                  tool + prompt registration (go-sdk)         FR-012, 013, 017, 018, 019
-  queue/                   SQLite store + single worker                FR-014, FR-015
-tests/e2e/                 own module, //go:build e2e, `make e2e`      NFR-001, NFR-002
-testdata/
-  fixture-app/             static HTML app for e2e
-  scripts/valid|invalid/   sample scripts for the core/script tests
-Dockerfile                 stages: dev -> build -> runtime
-Makefile                   dev-image, image, image-check, test, vet, lint, e2e, e2e-runtime (Go tooling runs in the dev image)
-.golangci.yml              depguard rules for the dependency rules below
+  server/                  tool and prompt registration                     FR-012, 013, 017, 018, 019
+  queue/                   SQLite store + single worker                     FR-014, FR-015
+tests/e2e/                 own module, //go:build e2e
+testdata/                  fixture app and sample scripts
 ```
 
-The JSON Schema lives next to the code that embeds it: `core/script/script.schema.json` (`go:embed` cannot reference a parent directory, Decision 55). `core/script/example.yaml` is the example shown in the `render_video` tool description.
+The JSON Schema sits next to the code that embeds it (`core/script`), because `go:embed` cannot reach a parent directory (Decision 55).
 
 **Dependency rules**
 
-- `cli` → `core`. `mcp` → `core`. Never the reverse, and `cli` never imports `mcp`.
-- `core` must not import SQLite or the MCP SDK.
-- `core/renderer` talks to the recorder (browser), TTS and ffmpeg through small interfaces (`Recorder`, `Synthesizer`, `Assembler`; `Cards` for the card screenshots). Unit tests use fakes. Only the e2e test uses the real tools.
+- `cli` → `core`, `mcp` → `core`. Never the reverse; `cli` never imports `mcp`.
+- `core` imports neither SQLite nor the MCP SDK.
+- Only `core/tts`, `core/assembler` and `core/browser` start subprocesses or call playwright-go. Everything else uses them through interfaces.
+- `core/renderer` reaches the browser, TTS and ffmpeg through small interfaces declared by the consumer (`Recorder`, `Synthesizer`, `Assembler`, `Cards`). Unit tests use fakes; only e2e uses the real tools.
+- Enforced by `depguard` in `.golangci.yml`.
 
 ## 4. Render pipeline
 
-`renderer.Render(ctx, Deps, Request) ([]Output, error)` is the single code path for CLI and MCP (BR-001, FR-011). `Deps` holds the tools (including `Cards`, the card screenshots), the installed voices, the clock and the run-ID source; `Request.Progress` is told about each step before it runs (CLI progress on stderr). `Request.Log` gets one line per render event: a start summary once the script is accepted, one line per phase and language with its elapsed time (narration, cards, recording, assembly) and an end line (`render done in …` plus the paths, or `render failed after …`). The wording lives in `renderer`; the CLI prints the lines on stderr, the MCP worker writes them to `slog` with the job id (decision 64). The only difference is the caller: CLI calls it directly, the MCP worker calls it after dequeueing.
+`renderer.Render(ctx, Deps, Request)` is the single code path for CLI and MCP (BR-001, FR-011); the caller is the only difference. `Deps` holds the tools, the voices, the clock and the run-ID source. `Request.Progress` and `Request.Log` report progress; the wording lives in `renderer`, the caller decides where it goes (stderr, `slog`; Decision 64).
 
 ```mermaid
 sequenceDiagram
@@ -117,15 +114,15 @@ sequenceDiagram
 
 Rules:
 
-1. **Validate first.** Schema, baseUrl, narration-per-language, voice installed, `outputDir` and the intro/outro `image` inside the working directory, resolved against the demo's folder, and the image existing as a regular file that starts like a PNG or JPEG (the MCP `script` path too, `renderer.ScriptPath`; the CLI may name any script). All before any browser or TTS work (FR-001, FR-002, BR-011).
+1. **Validate first.** Everything checkable without a browser or TTS is checked before either starts: schema, `baseUrl`, narration per language, installed voices, paths inside the working directory (BR-011, FR-001, FR-002).
 2. **Languages run sequentially**, each from a fresh browser context (FR-004).
-3. **TTS before browser** for each language, because clip durations decide step timing (FR-003). The cards come right after TTS and before the recording, so a card problem fails before the slow part.
-4. **Abort path.** First step error cancels the context, closes the browser, deletes the job temp dir and returns a `Failure`. Nothing reaches `outputDir`. If `en` succeeded and `pl` fails, the `en` MP4 is discarded too (BR-004).
-5. **Publish last.** After all languages succeed, files are moved into `outputDir` with a single shared timestamp (FR-010, BR-006). Every target is checked for existence first. Move is `os.Rename`. If temp and output are on different filesystems, copy to `<name>.part` in `outputDir` (`O_EXCL`), then rename. Existing files are never opened for writing. If a move fails, the files already moved by this job are removed again.
+3. **TTS before browser**, because clip durations decide step timing (FR-003). Cards come right after TTS, so a card problem fails before the slow part.
+4. **Abort path.** The first step error cancels the context, closes the browser, deletes the temp dir and returns a `Failure`. Nothing reaches `outputDir`; a finished `en` is discarded when `pl` fails (BR-004).
+5. **Publish last.** After all languages succeed, files move into `outputDir` with one shared timestamp (FR-010, BR-006). Every target is checked for existence first, existing files are never opened for writing, a cross-filesystem move goes through `<name>.part` then rename, and a failed move removes what the job already moved.
 
 ## 5. Timing and synchronization model
 
-This is the part most likely to go wrong, so it is defined precisely.
+The part most likely to go wrong, so it is defined precisely.
 
 ```
 t0 ──────────────────────────────────────────────────────────► recording time
@@ -135,85 +132,70 @@ t0 ─────────────────────────�
  │   └─ next starts at max(action end, start+clip)  └─ next starts at action end
 ```
 
-- **t0** is a monotonic timestamp taken immediately before the recorded page is created (ADR-46). Every step start offset is `now − t0 − LeadInCompensation` in ms (90 ms, clamped at 0), see the known risk below.
-- For each step: record `offset`, start the action, then wait until `max(actionEnd, offset + clipDuration)` if narrated, else continue at `actionEnd` (BR-003, FR-007).
-- Narration is **not** played during recording. Assembler places each clip at `adelay=<offset>ms` and mixes (FR-009.1). So audio sync does not depend on real-time playback.
-- Playwright's WebM is variable frame rate. The transcode forces constant 30 fps (`-r 30` / `fps=30` filter) so video time equals wall time and offsets stay valid.
-- The video is `intro card + recording + outro card` (3 s each by default, decision 63). The recorder knows nothing of the cards: its offsets are relative to the recording, and the assembler places each clip at `introDuration + offset`. The cards are stills (`-loop 1 -framerate 30 -t <s>`), fitted to 1920×1080, joined to the recording with `concat`; every input is finite. The audio ends with the last clip, so it may end before the outro does.
-- Output duration is the video length (FR-009.4). The last narrated step waits for its clip, so the video always covers the audio. The assembler therefore mixes the clips without padding; an endless `apad` with `-shortest` never terminates in ffmpeg 5.1 (found in M3). With no narrated step, `anullsrc` is mapped directly and cut by `-shortest`.
-- Target drift: ±100 ms (FR-007 AC). The e2e test measures actual drift by checking an audible/visible marker step against its offset, and accepts **±150 ms** (`maxDrift` in `tests/e2e/render_test.go`): a runtime-image run measured 125 ms because the WebM start is not fixed (see the lead-in note below and §17.1). This is a deviation from FR-007, kept until the lead-in is measured per recording.
+- **t0** is a monotonic timestamp taken just before the recorded page is created (Decision 46). A step's offset is `now − t0 − LeadInCompensation`, clamped at 0.
+- Per step: record the offset, start the action, then wait until `max(actionEnd, offset + clipDuration)` if narrated, else continue at `actionEnd` (BR-003, FR-007).
+- Narration is not played while recording. The assembler places each clip at its offset and mixes offline, so sync does not depend on real-time playback.
+- The transcode forces a constant frame rate, so video time equals wall time and offsets stay valid (Decision 50).
+- The video is `intro card + recording + outro card`. The recorder knows nothing of the cards: its offsets are relative to the recording and the assembler adds the intro length. Every concat input is finite.
+- Output length is the video length (FR-009.4). The last narrated step waits for its clip, so the video always covers the audio; the assembler mixes clips without padding.
+- Drift target ±100 ms (FR-007). The e2e check accepts a wider bound while the lead-in is a constant (§17.1).
 
-**Lead-in (spike S1, ADR-46):** Playwright's video time 0 is about 90 ms after page creation, so a clip placed at the raw offset would play that much late. The recorder subtracts the fixed constant `recorder.LeadInCompensation` (90 ms) from every offset. No trimming. **Known limit:** the video start is bimodal (§17.1), so in some recordings the fixed constant is wrong and narration plays late.
+**Lead-in (Decision 46):** the video starts a little after page creation, so the recorder subtracts a fixed `LeadInCompensation` from every offset instead of trimming. Known limit: the real start is bimodal (§17.1), so in some recordings narration plays late.
 
-**Start page:** a new page is white and stays on screen until the first `goto` paints, so the video would flash white right after the start card. `Session.Start` therefore shows the start card's picture (`recorder.Input.StartImage`, the intro still the renderer already has) fitted on the card background (`#0f172a`), so the card carries on until the site appears; with no intro it is the colour alone. The paint happens after `t0`, so offsets are unaffected. `TestRecord_startsDark` guards the colour.
+**Start page:** a new page is white until the first `goto` paints, which would flash white after the start card. The recorded page therefore shows the intro picture on the card background first (`recorder.Input.StartImage`), so the card carries on until the site appears; with no intro it is the plain card colour. The paint happens after `t0`, so offsets are unaffected.
 
 ## 6. Concurrency model
 
 ### 6.1 Processes
 
-- `screencaster-mcp`: long-lived, one per Claude Code session (`docker run -i --rm`).
+- `screencaster-mcp`: long-lived, one per Claude Code session.
 - `screencaster`: short-lived, one per CLI render.
-- Both can be alive at once on the same `/work`.
+- Both may run at once on the same `/work`.
 
 ### 6.2 Inside `screencaster-mcp`
 
 | Goroutine | Role |
 |-----------|------|
-| MCP server loop | Serves stdio. `render_video` validates, inserts a job, signals the worker. `get_render_status` reads SQLite. |
-| Queue worker (exactly one) | Dequeues oldest `queued`, takes the render lock (6.3), sets `running`, calls `renderer.Render`, writes the result (BR-008, FR-014). |
-| `explore_page` handlers | Run on the request goroutine. A mutex serializes them against each other (FR-017). They do **not** wait for the worker. |
+| MCP server loop | Serves stdio. `render_video` validates, inserts a job and wakes the worker. `get_render_status` reads SQLite. |
+| Queue worker (exactly one) | Takes the oldest `queued` job, acquires the render lock (§6.3), sets `running`, calls `renderer.Render`, stores the result (BR-008, FR-014). |
+| `explore_page` handlers | Run on the request goroutine, serialized by a mutex. They do not wait for the worker. |
 
-**Explore may overlap a render** (ADR-44). Two Chromiums can then run at once. Consequences:
-
-- Render timing can jitter while an explore call runs. Narration offsets stay correct because they come from recorded timestamps, not from a fixed schedule. Only the pacing of the video changes.
-- NFR-001 (≤ 2× duration) is measured in the e2e test with no explore running.
-- If this proves a problem in practice, add a shared semaphore later. No interface change is needed, since only the browser launch point is involved.
+**Explore may overlap a render** (Decision 44). Render timing can jitter, but offsets come from recorded timestamps, so narration stays correct. If it becomes a problem, add a shared browser semaphore; no interface changes.
 
 ### 6.3 Render lock
 
-CLI bypasses the queue (BP-003), so a CLI render and an MCP job could run together. A lock file prevents it (ADR-45).
+The CLI bypasses the queue (BP-003), so a lock file keeps a CLI render and an MCP job apart (Decision 45).
 
-- Path: `<work>/.screencaster/render.lock`, `flock(LOCK_EX)`.
-- **CLI:** non-blocking attempt. If held, print `another render is running` and exit 1.
-- **Worker:** blocking acquire with retry before setting the job `running`. A job waiting on the lock stays `queued`.
-- Released on process exit by the kernel, so a crash cannot leave a stale lock.
-- Works across containers because they share the same host kernel through the bind mount.
+- `<work>/.screencaster/render.lock`, `flock(LOCK_EX)`; the kernel releases it on exit, so a crash leaves nothing stale. It works across containers sharing the bind mount.
+- **CLI:** one non-blocking attempt; if held, print `another render is running` and exit 1.
+- **Worker:** blocking acquire before the job becomes `running`; a waiting job stays `queued`.
 - `explore_page` does not take the lock.
-- **MCP startup** tries the lock without waiting before it empties `tmp/` (§11). If a CLI render holds it, the temp dirs stay; the next start removes them.
+- MCP startup tries the lock without waiting before it clears `tmp/` (§11); if a CLI render holds it, the next start cleans up.
 
 ### 6.4 Shutdown
 
-Claude Code closing stdin or `docker stop` sends the process a signal or EOF. Handler cancels the root context: browser closes, job temp dir is deleted, process exits. The job row stays `running` and BR-009 marks it `interrupted` at next start. The docs recommend `docker run --init` so signals are forwarded.
+EOF on stdin or a signal cancels the root context: the browser closes, the temp dir goes, the process exits. The job row stays `running` and recovery marks it `interrupted` at next start (BR-009). Run containers with `--init` so signals are forwarded.
 
 ## 7. Step executor (shared)
 
 One implementation of FR-005 semantics, two modes:
 
-| | `render` mode | `explore` mode |
+| | `render` | `explore` |
 |---|---|---|
-| Cursor overlay (init script) | yes | no |
-| Mouse glide, 25 steps | yes | no |
-| Typing delay 60 ms/char | yes | no |
+| Cursor overlay, mouse glide, typing delay | yes | no |
 | Records step offsets | yes | no |
 | Timeout per action | 30 s | 30 s |
 
-```go
-type Mode struct { Visuals bool }
-func (e *Executor) Run(ctx context.Context, i int, s script.Step) error // returns *failure.StepFailure
-```
+Same selectors, same URL resolution against `baseUrl` (BR-010), same error shape. That is the guarantee behind FR-017 AC3: a selector returned by `explore_page` works in a render.
 
-Same selectors, same URL resolution against the script's `baseUrl` (BR-010), same error shape. That is the guarantee behind FR-017 AC3: *a selector returned by `explore_page` works in a render*.
-
-**Selector strictness.** A selector matching several elements must fail, not silently click the first one. Executor uses strict locators. `explore_page` therefore emits only selectors that match exactly one element, and adds `>> nth=N` when names collide.
+**Selector strictness.** A selector matching several elements fails instead of clicking the first. The executor uses strict locators, so `explore_page` emits only selectors that match one element and disambiguates with `>> nth=N`.
 
 ## 8. `explore_page` design
 
-- Fresh non-recorded context: 1920×1080, `storageState` and `baseURL` from the tool input (FR-017). `baseURL` is the absolute `url` itself, so a relative `goto` in `actions` resolves against the explored page (decision 59).
-- Replays `actions` with executor in `explore` mode, then captures the page.
-- Snapshot source: Playwright ARIA snapshot (`Locator.AriaSnapshot` on `body`), lines like `- button "New project"`, `- textbox "Name": Demo`, `- option "Public" [selected]`, indented by nesting (spike S4, §17). The explorer appends ` -> role=<role>[name="<name>"]` right after the name and attributes of every named line whose role is interactive (button, link, textbox, checkbox, radio, combobox, menuitem, tab, option). It checks uniqueness with a `Count` call against the live page and adds ` >> nth=<i>` on a collision, `i` counting the earlier lines with the same selector (ADR-47).
-- Output capped at 50 000 chars with `truncated: true`.
-- On action failure: tool error with `{step, action, target, message}` plus the snapshot at that moment (FR-017 edge case). The initial navigation is step 0, the `actions` are steps 1..n.
-- Concurrent calls queue on a package-level mutex in `core/explorer`.
+- Runs in a fresh, non-recorded context with the caller's `storageState`. The `url` is also the `baseURL`, so relative `goto`s in `actions` resolve against the explored page (Decision 59).
+- Replays `actions` through the executor in `explore` mode, then captures the page as an ARIA snapshot (Decision 47). Each named interactive line gets a ready-to-use selector, checked for uniqueness against the live page.
+- Output is capped (`truncated: true`).
+- On an action failure the tool returns `{step, action, target, message}` plus the snapshot at that moment (FR-017). The initial navigation is step 0.
 
 ## 9. Error model
 
@@ -229,24 +211,21 @@ type Failure struct {
 }
 ```
 
-| Kind | Produced by | Message format | CLI | MCP |
-|------|-------------|----------------|-----|-----|
-| Validation | script, voices, renderer (paths) | list of `{pointer, message}` | print, exit 1 | tool error, no job created |
-| Step | executor | BR-004 fields | print, exit 1 | `jobs.error_json` |
-| TTS | tts | `tts failed at step <n> (<lang>): <stderr>` | print, exit 1 | `error_json.message` |
-| Assembly | assembler | `assembly failed (<lang>): <last 20 stderr lines>` | print, exit 1 | `error_json.message` |
-| Cards | renderer (card page, browser screenshot) | `build cards (<lang>): <message>` | print, exit 1 | `error_json.message` |
-| Interrupted | startup recovery | `{message: "interrupted"}` | n/a | `error_json` |
+| Kind | Produced by | CLI | MCP |
+|------|-------------|-----|-----|
+| Validation (list of `{pointer, message}`) | script, voices, renderer | print, exit 1 | tool error, no job created |
+| Step | executor | print, exit 1 | `jobs.error_json` |
+| TTS, Assembly, Cards | tts, assembler, renderer | print, exit 1 | `error_json.message` |
+| Interrupted | startup recovery | n/a | `error_json` |
+
+Step, TTS, assembly and card failures become a `Failure` before they leave `core`. Messages name the step or phase and the language, and include the tool's stderr tail where there is one.
 
 ## 10. Job queue and persistence (MCP only)
 
-SQLite via `modernc.org/sqlite`, file `<work>/.screencaster/jobs.db`. Schema is PRD §13. Additional notes:
+SQLite (`modernc.org/sqlite`), file `<work>/.screencaster/jobs.db`; schema in PRD §13. Only the MCP process opens it.
 
-- Index on `(status, created_at)` for dequeue and position.
-- `created_at` is RFC 3339 UTC with a fixed 9-digit fraction (`2006-01-02T15:04:05.000000000Z`, Decision 57); `rowid` breaks ties, so back-to-back submissions keep FIFO order.
-- `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`. Only the MCP process opens the DB, so contention is limited to the request goroutines and the worker.
-- `position` (for `queued` jobs) = number of `queued` jobs ordered before it by `(created_at, rowid)`, plus 1; a running job does not count.
-- Worker is woken by a buffered channel (`cap 1`) on insert. No polling loop needed. On start, recovery runs first (FR-015), so nothing is stale.
+- FIFO by `(created_at, rowid)`. Timestamps use a fixed-width UTC layout so text order equals time order (Decision 57). A job's `position` counts the `queued` jobs before it plus one; a running job does not count.
+- WAL mode with a busy timeout. The worker is woken by a buffered channel on insert, no polling. Recovery runs first at start (FR-015).
 
 ```mermaid
 stateDiagram-v2
@@ -264,101 +243,85 @@ stateDiagram-v2
 
 ```
 /work                          mounted project (rw)
-├── demos/*.yaml               scripts, each with its own baseUrl, storageState, outputDir (FR-001)
-├── demos/assets/*             card pictures a demo names with `intro.image` / `outro.image` (any folder inside /work works)
-├── demos/output/              <name>.<lang>.<ts>.mp4  (never overwritten); outputDir resolves against the demo's folder
+├── demos/*.yaml               scripts: baseUrl, optional storageState and outputDir (FR-001)
+├── demos/assets/*             card pictures named by intro.image / outro.image
+├── demos/output/              <name>.<lang>.<ts>.mp4, never overwritten
 ├── voices/*.onnx(+.json)      extra Piper voices (FR-016)
 └── .screencaster/
     ├── jobs.db                MCP only
     ├── render.lock
-    └── tmp/<runId>/<lang>/    clips/*.wav, video/*.webm, cards/*.png, out.mp4
+    └── tmp/<runId>/<lang>/    clips, video, cards, out.mp4
 ```
 
-- `runId` is the job UUID for MCP and a random ID for CLI. The temp dir is removed on success and on abort.
-- At MCP start, `queue.RemoveStaleTemp` removes any `tmp/*` left by interrupted renders, but only while it holds the render lock: a CLI render running at that moment has its own `tmp/<runId>` there (§6.3).
-- Add `.screencaster/` to the project's `.gitignore` (documented in README).
+- Every path in a demo resolves against the demo file's folder and must stay inside the working directory (Decision 62).
+- `runId` is the job UUID (MCP) or a random ID (CLI). The temp dir is removed on success and on abort.
+- MCP startup removes stale `tmp/*`, only while it holds the render lock (§6.3).
+- `.screencaster/` belongs in the project's `.gitignore`.
 
 ## 12. Docker image
 
-- Base: Debian slim with Chromium system deps (installed through the playwright-go driver install step).
-- Contents: `screencaster`, `screencaster-mcp`, Playwright Node driver + Chromium, Piper binary (`/opt/piper/piper`, release 2023.11.14-2, libs and espeak-ng data next to it), voices `en_US-ryan-high` and `pl_PL-darkman-medium` under `/opt/piper/voices`, `ffmpeg`/`ffprobe` (FR-016). Piper and the voices are sha256-pinned.
-- Voice discovery scans `/opt/piper/voices` and `/work/voices`. The language code is the voice name up to the first `_` (FR-018).
-- Network: `--add-host=host.docker.internal:host-gateway` makes a demo's `baseUrl` reach the host app on Linux (Decision 27).
-- **Stdio hygiene.** MCP uses stdout for protocol frames. All logging goes to stderr: the render log lines reach it through `Request.Log` and `slog` (decision 64). Subprocess stdout/stderr (Piper, ffmpeg, Playwright driver) is captured and never inherited. A stray byte on stdout corrupts the session.
-- Image build is multi-stage: `piper` (Piper + voices, shared with `dev`), `dev` (toolchain for `make`), `build` (static `screencaster` and `screencaster-mcp`, plus the playwright CLI at the version `core/go.mod` pins), `runtime` (last, so `docker build .` yields it). `runtime` is `debian:bookworm-slim` + Chromium (via `playwright install --with-deps`) + ffmpeg + Piper + both binaries in `/usr/local/bin`.
-- The runtime image runs as root with `WORKDIR /work`, so output files in the mounted project are owned by root. Use `docker run --init` so SIGTERM reaches the process (§6.4).
-- `make image-check` lists `/opt/piper/voices` in the image and requires the `.onnx` and `.onnx.json` of every built-in voice in `core/voices`.
+- One multi-stage image: `piper` (Piper + voices), `dev` (toolchain for `make`), `build` (static binaries), `runtime` (last, so `docker build .` yields it). The runtime holds both binaries, Chromium, ffmpeg, Piper and the built-in voices. Piper and the voices are checksum-pinned.
+- Voice discovery scans the image's voice folder and `/work/voices`; the language is the voice name up to the first `_` (FR-018).
+- `--add-host=host.docker.internal:host-gateway` lets a `baseUrl` reach the host app on Linux (Decision 27). The container runs as root, so output files are root-owned.
+- **Stdio hygiene.** MCP uses stdout for protocol frames, so all logging goes to stderr and subprocess output (Piper, ffmpeg, the Playwright driver) is captured, never inherited. A stray byte on stdout corrupts the session.
+- Go tooling runs in the dev image (Decision 52); `make image-check` verifies the built-in voices are in the image.
 
 ## 13. Testing strategy
 
 | Level | Scope | Tools |
 |-------|-------|-------|
-| Unit | schema, baseUrl and storageState checks, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler`, `Cards` |
-| Integration | SQLite store, lock file semantics, MCP tool/prompt wiring via in-memory transport | `go test` |
-| E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | `make e2e` in the dev image, locally (Decision 54); `make e2e-runtime` runs the CLI tests against the runtime image (Decision 56) |
+| Unit | schema and cross-field rules, voice resolution, offset math, the wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler`, `Cards` |
+| Integration | SQLite store, lock semantics, MCP wiring over an in-memory transport | `go test` |
+| E2E | fixture app → real render (EN, EN+PL), output format, drift, duration ratio (NFR-001), an `explore_page` selector used in a render | `make e2e` in the dev image; `make e2e-runtime` runs the CLI tests against the runtime image (Decisions 54, 56) |
 
-CI (GitHub Actions): `golangci-lint`, `go vet`, `go test -race` per module; an `image` job (`make image` + `make image-check`, no push). E2E does not run in CI (Decision 54).
+CI runs lint, vet and `go test -race` per module plus an image build; e2e runs locally only (Decision 54).
 
 ## 14. Security notes
 
 Local single-user tool (PRD §14), so the model is minimal:
 
-- A demo's inline `storageState` holds live session cookies. Keep such a demo out of git. The container has the project mounted rw but no other host access.
-- No outbound network except Chromium to `baseUrl` and any absolute `goto` URLs (NFR-003).
-- Scripts are data, not code. YAML is parsed into typed structs and the schema rejects unknown fields. Selectors go to Playwright only.
+- An inline `storageState` holds live session cookies: keep such a demo out of git.
+- No outbound network except Chromium to `baseUrl` and absolute `goto` URLs (NFR-003).
+- Scripts are data. YAML parses into typed structs, the schema rejects unknown fields, and selectors go only to Playwright. Paths in scripts and tool input are not trusted: they are checked against the working directory (Decision 58).
 
 ## 15. Extension points (post-MVP)
 
-- **Slides / overlays** (PRD §10.2): a start card and an end card exist (decision 63); slides interleaved between browser segments are not designed for in MVP. `recorder` produces one recording per language. When interleaved slides arrive, change the recorder output and assembler then, building on the still handling in `assembler`. Overlays would hook in as an executor-level init script, like the cursor.
-- **New languages:** no code change. Drop `.onnx` + `.onnx.json` into `/work/voices`.
-- **Other TTS engines:** behind `Synthesizer`. Explicitly out of scope now.
+- **Slides / overlays** (PRD §10.2): only start and end cards exist (Decision 63). Interleaved slides would change the recorder output and the assembler; overlays would hook in as an executor init script, like the cursor.
+- **New languages:** no code change, add the voice files under `/work/voices`.
+- **Other TTS engines:** behind `Synthesizer`; out of scope now.
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–64 are also in the PRD log; 56 and 57 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–64 are also in the PRD log; 56, 57 and 61 are only here.
 
-| # | Decision | Alternatives | Rationale |
-|---|----------|--------------|-----------|
-| 44 | `explore_page` may overlap a running render; no shared browser lock | Shared semaphore; reject during render | User choice. Offsets come from timestamps, so correctness holds. Revisit if timing jitter shows up. |
-| 45 | `flock` lock file `.screencaster/render.lock` guards CLI vs MCP worker. CLI fails fast, worker waits | No lock; CLI enqueues via SQLite | User choice. Kernel releases on crash. Keeps PRD rule that CLI has no queue or job record. |
-| 46 | Recording `t0` = monotonic timestamp just before recorded page creation; no trimming; fixed compensation (90 ms, measured in the M2 spike, see §17) | Trim lead-in with `ffmpeg -ss` | User choice. Fewer moving parts. |
-| 47 | `explore_page` snapshot = ARIA snapshot plus derived, uniqueness-checked selectors | Deprecated `page.Accessibility.Snapshot`; raw DOM dump | Supported API. Guarantees the "selector works in render" AC. Format confirmed in spike S4 (§17). |
-| 48 | Logs to stderr only, subprocess output captured | — | Required by MCP stdio. |
-| 49 | Clip duration read from the WAV header, not ffprobe | Spawn ffprobe per clip | No subprocess per clip, exact for PCM WAV. Piper emits PCM s16le WAV (confirmed in the M3 spike, see §17). |
-| 50 | Constant 30 fps forced during transcode | Pass VFR through | Keeps video time equal to wall time for `adelay` offsets. |
-| 51 | Commit `go.work` and `go.work.sum` | Ignore and generate in CI/Docker | One source of truth for CI, the image and contributors. |
-| 52 | Dev Docker image from M1; every `make` target runs in it | Host Go install | The host has only Docker; one toolchain everywhere. golangci-lint is pinned to v2.12.0, the newest release that builds on Go 1.25. |
-| 53 | `cobra` for the CLI | std `flag` | User choice; documented deviation from KISS (CODE_QUALITY). |
-| 54 | e2e in module `tests/e2e`, local only (`make e2e`) | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. The pipeline is not verified in CI. |
-| 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
-| 56 | `make e2e-runtime`: the e2e test binary is compiled in the dev image and runs inside the runtime image, with `SCREENCASTER_BIN` pointing at the image's binary; the test process serves the fixture on 127.0.0.1 | CLI binary in the image, fixture in the dev container over a docker network (the original M4 plan) | Same coverage of the image's binary, Chromium, Piper and ffmpeg. No network, no docker-in-docker, nothing to orchestrate. |
-| 57 | Job timestamps use a fixed-width UTC layout with 9 fraction digits, not `RFC3339Nano` | `RFC3339Nano` | `RFC3339Nano` trims trailing zeros, so `…05Z` sorts after `…05.1Z` as text and breaks the `ORDER BY created_at`. Still valid RFC 3339. |
-| 58 | Each demo is one self-contained YAML: `baseUrl` required, `storageState` and `outputDir` optional, `screencaster.yaml` and `core/config` removed (a warning names a stray file: CLI on every render, MCP once at startup). Supersedes PRD decision 15 | Optional `screencaster.yaml` fallback; paths relative to the demo file; a slim `core/config` for path helpers | User choice. No hidden project state. The URL rule (`script.AbsoluteHTTP`) lives in Go, the field shape in the schema. `storageState` is an inline object in the schema (Playwright's shape, `script.StorageState`), not a file path; `core/browser` converts it to Playwright's type. The rule that `outputDir` stays inside the working directory lives in `core/renderer` (`Prepare`; `ScriptPath` confines the `render_video` script path), which already does file I/O; the script and the tool input are LLM-written, so their paths are not trusted. |
-| 59 | `explore_page` takes an absolute `url` plus an optional inline `storageState`; the url is also the explorer's `BaseURL` | Path plus a `baseUrl` input | Nothing to read from disk. Relative gotos in `actions` resolve against the explored page, so `core/explorer` and `core/executor` stay unchanged. |
-| 60 | No project-level voice defaults: script, then built-in | Keep config voices; env-var defaults | Follows from 58. `voices.Resolve` and `Options` lose the config parameter. |
-| 61 | `storageState` is an inline object (`script.StorageState`, Playwright's shape) in the script and in `explore_page`, not a file path | Path to a Playwright JSON file | User choice. One self-contained file; no file-existence or inside-workdir check, and `renderer.StorageStatePath` is gone. `core/browser` hands it to Playwright by a JSON round trip, so the Go type carries Playwright's tags. |
-| 62 | Every path in a demo resolves against the demo file's folder (`renderer.Prepare`): `outputDir` defaults to `<demo dir>/output`, a card `image` is relative to the demo. Each must stay inside the working directory. Supersedes the "relative to the demo file" rejection in 58 | Paths relative to the working directory | User choice. A demo, its videos and its pictures move together; the inside-work-dir rule stays because the script is LLM-written. A script outside the work dir has its default output outside too and is rejected until `outputDir` is an absolute path inside it. |
-| 63 | Every video has a 3 s start card and a 3 s end card unless `false`. The built-in card is `core/card`'s embedded HTML page screenshotted by Chromium (`browser.Launcher.Screenshot`, one launch per language), a custom `image` is used as is; `assembler` loops each still, fits it to 1920×1080 and joins it with `concat`, and shifts the clip offsets by the intro | Opt-in cards; ffmpeg `drawtext`; Go image rendering; cards recorded as browser pages | User choice. Chromium wraps text and has the Polish glyphs (spike S5). Recorded pages would pass through the 30 fps VFR WebM and meet the bimodal start (§17.1). |
-| 64 | Render log lines come from `renderer` through `Request.Log` (a `func(string)`); the CLI writes them to stderr, the MCP worker to `slog` with the job id | A `*slog.Logger` in `Deps` | One place for the wording; plain lines in the CLI instead of `time=… level=…`. Nothing on stdout. |
+| # | Decision | Why |
+|---|----------|-----|
+| 44 | `explore_page` may overlap a render; no shared browser lock | Offsets come from timestamps, so correctness holds. Revisit if jitter shows. |
+| 45 | `flock` file guards CLI against the MCP worker; CLI fails fast, worker waits | Kernel releases on crash; keeps the rule that the CLI has no queue or job record. |
+| 46 | `t0` = just before page creation; fixed lead-in compensation, no trimming | Fewer moving parts (§17.1). |
+| 47 | `explore_page` = ARIA snapshot plus derived, uniqueness-checked selectors | Supported API; guarantees "selector works in render". |
+| 48 | Logs to stderr only, subprocess output captured | Required by MCP stdio. |
+| 49 | Clip duration read from the WAV header | No subprocess per clip; exact for PCM WAV. |
+| 50 | Constant frame rate forced in the transcode | Video time equals wall time for the offsets. |
+| 51 | `go.work` and `go.work.sum` are committed | One source of truth for CI, the image and contributors. |
+| 52 | Dev image from the start; every `make` target runs in it | The host needs only Docker; one toolchain everywhere. |
+| 53 | `cobra` for the CLI | User choice; a documented deviation from KISS. |
+| 54 | e2e in its own module, local only | Keeps CI fast; the pipeline is not verified in CI. |
+| 55 | Schema at `core/script/script.schema.json` | `go:embed` cannot reach a parent directory. |
+| 56 | `make e2e-runtime`: test binary built in the dev image, run inside the runtime image | Covers the image's binary, Chromium, Piper and ffmpeg with no network or docker-in-docker. |
+| 57 | Job timestamps use a fixed-width UTC layout | `RFC3339Nano` trims zeros and breaks text ordering. |
+| 58 | Each demo is one self-contained YAML (`baseUrl` required; `storageState`, `outputDir` optional); no project config file. Supersedes PRD decision 15 | No hidden project state. Script and tool-input paths are LLM-written, so `core/renderer` confines them to the working directory. |
+| 59 | `explore_page` takes an absolute `url` and an inline `storageState`; the url is the `BaseURL` | Nothing to read from disk; executor and explorer stay unchanged. |
+| 60 | No project-level voice defaults: script, then built-in | Follows from 58. |
+| 61 | `storageState` is an inline object in Playwright's shape, not a file path | One self-contained file; no existence or path checks. |
+| 62 | Demo paths resolve against the demo's folder and must stay inside the working directory. Supersedes the rejection in 58 | A demo, its videos and its pictures move together. |
+| 63 | Every video gets a start and end card unless `false`; built-in cards are an embedded HTML page screenshotted by Chromium, a custom `image` is used as is; the assembler joins them with `concat` and shifts clip offsets by the intro | Chromium wraps text and has the Polish glyphs. Recorded cards would meet the bimodal start (§17.1). |
+| 64 | Render log lines come from `renderer` through `Request.Log`; the caller chooses stderr or `slog` | One place for the wording; nothing on stdout. |
 
 ## 17. Open items for spikes
 
-1. **M2:** measure the gap between page creation and first recorded frame (ADR-46). **Done: compensation added.** Method: `t0` just before `NewPage`, `goto marker.html`, wait 1 s, click `#marker` (full-viewport white flash), then find the first dark→bright frame in the raw WebM with ffmpeg `signalstats`. Over 10 runs (dev image, playwright-go v0.6201.1) the flash frame sits **52–129 ms before** the click's offset from `t0`, mean ≈ 90 ms; 2 of 10 runs exceed 100 ms. The WebM has a 40 ms frame step, so each sample is ±40 ms. The sign is consistent: video time 0 is ~90 ms after `t0`, so clips placed at raw offsets play ~90 ms late. The mean sits just under the ADR-46 gate but the spread does not, so `recorder.LeadInCompensation = 90ms` is subtracted from every offset (clamped at 0). With it the residual is about ±40 ms. `TestRecord_leadInIsWithinTolerance` guards it; the M3 drift e2e measures audio vs flash end to end. **Later finding (2026-10-04): the start is bimodal.** Recording `projects.html` → `marker.html` → click, 15 runs: in 10, video time 0 ≈ t0 + 60 ms; in 5, the first page's frames are missing and video time 0 ≈ t0 + 590 ms, so narration is ~0.5 s late (one full render measured −1.464 s). S1 (about:blank → marker at once) cannot see this. One runtime-image e2e run measured 125 ms, which is why the e2e accepts ±150 ms (§5). Open: measure the lead-in per recording instead of the constant.
-2. **M2:** confirm strict-locator behavior of playwright-go for `click`/`hover`/`fill` and that ambiguous selectors fail with a usable message. **Done: passes.** Locators are strict by default. A selector matching 2 elements fails in ~10 ms for click, hover, fill and the cursor glide, with `strict mode violation: locator('a') resolved to 2 elements:` plus the candidates. The executor uses this directly, with no `Count()` pre-check. Guarded by `TestBrowser_ambiguousSelectorFailsFast` (e2e).
-3. **M3:** confirm Piper CLI flags and WAV format (sample rate, PCM) for ADR-49. **Done: passes.** `piper --model <voice>.onnx --output_file <out.wav>` with the text on stdin works for both built-in voices; no `--espeak_data` is needed because the binary finds `espeak-ng-data` next to itself. Output is PCM s16le, 22050 Hz, mono, with a plain `fmt ` (16 bytes) + `data` layout. The header duration (data bytes / byte rate, 80104 / 44100 = 1.816417 s) equals ffprobe's. Piper prints the output path on stdout (so stdout must not be inherited) and logs to stderr; a missing model aborts with exit 134 and `what(): Model file doesn't exist`. ADR-49 stands. Guarded by `TestParseWAV_durationFromHeader`.
-4. **M5:** confirm `Locator.AriaSnapshot` output in playwright-go and build the role→selector mapper (ADR-47). **Done: passes.** `page.Locator("body").AriaSnapshot()` returns YAML-like text, one `- role "name" [attrs]: value` line per node, two spaces per nesting level. On the fixture's projects page after opening the form:
-   ```
-   - heading "Projects" [level=1]
-   - button "New project"
-   - textbox "Name": Demo
-   - combobox "Visibility":
-     - option "Public" [selected]
-   - button "Create"
-   - contentinfo: Footer
-   ```
-   Nameless nodes (`- text: Name`) carry no quotes. A regexp over the leading `- role "name"` is enough to map lines to `role=<role>[name="<name>"]`, so the `Evaluate` DOM-walk fallback is not needed. The `role=` selector compares the whole name (`"Save"` does not match `"Save all"`), so the `Count` check and `>> nth=` suffix are needed only for repeated names. Guarded by `TestExplore_selectorsWorkInARender`, `TestExplore_selectorsPickTheirOwnElement` (e2e) and the mapper unit tests.
-5. **Cards:** confirm the built-in card renders the Polish letters in the images and that `concat` of looped stills with the recording ends and keeps audio in sync. **Done: passes.** Rendered in the dev image, `Dziękujemy za uwagę` and `żółć` show the right glyphs (checked by eye, and `TestScreenshot_polishGlyphsAreDistinct` fails if a letter falls back to the same box). Stills with `-loop 1 -framerate 30 -t <s>` into `concat` (n=3) end at the sum of the parts: a 5 s recording with a 3 s intro and a 3 s outro gave 11.0 s, h264 1920×1080 30 fps, with the aac stream ending with the last clip. The e2e drift check keeps passing with the intro on, the flash search starting after the intro. The same Polish check runs against the runtime image in `make e2e-runtime`.
-
-## 18. PRD inconsistencies
-
-None open. The glossary, FR-002 (embed wording, schema path), FR-014 (render lock) and §18 repo structure were aligned with this document in M1.
+1. **Lead-in (Decision 46).** The first recorded frame comes about 90 ms after page creation, so offsets are shifted by `recorder.LeadInCompensation` (residual about ±40 ms). **The start is bimodal:** in about a third of recordings the first page's frames are missing and video time 0 is about 0.5 s after `t0`, so narration plays late. Open: measure the lead-in per recording. Guarded by `TestRecord_leadInIsWithinTolerance` and the e2e drift check.
+2. **Strict locators.** playwright-go locators are strict by default; an ambiguous selector fails fast with the candidates, so the executor needs no pre-check. Guarded by `TestBrowser_ambiguousSelectorFailsFast`.
+3. **Piper (Decision 49).** `piper --model <voice>.onnx --output_file <out.wav>` with the text on stdin; the output is PCM s16le mono and the header duration matches ffprobe. Piper prints the output path on stdout, so stdout must not be inherited. Guarded by `TestParseWAV_durationFromHeader`.
+4. **ARIA snapshot (Decision 47).** `Locator("body").AriaSnapshot()` gives one `- role "name" [attrs]: value` line per node, indented by nesting; a regexp over the leading role and name is enough to derive selectors. The `role=` selector matches the whole name, so uniqueness checks and `>> nth=` are only needed for repeated names. Guarded by the explore e2e tests and the mapper unit tests.
+5. **Cards (Decision 63).** The built-in card renders the Polish letters (`TestScreenshot_polishGlyphsAreDistinct`), and looped stills joined with `concat` end at the sum of the parts with audio still in sync.
