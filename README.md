@@ -2,6 +2,10 @@
 
 Turn a natural-language description into a narrated demo video (MP4) with re-renderable YAML scripts.
 
+![screencaster rendering a demo from the terminal, then playing the video](docs/demo.gif)
+
+*This demo was made with screencaster itself.*
+
 ## Quick start
 
 1. **Clone and build** (Go 1.25; `go.work` is committed):
