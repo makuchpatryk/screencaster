@@ -49,6 +49,7 @@ func TestParse_validSamples(t *testing.T) {
 		{"valid/all-actions.yaml", nil, 12},
 		{"valid/all-target-fields.yaml", nil, 1},
 		{"valid/cards.yaml", nil, 1},
+		{"valid/silent-narration.yaml", []string{"en", "pl"}, 2},
 		{"valid/cards-text.yaml", nil, 1},
 	}
 	for _, tt := range tests {
@@ -319,6 +320,11 @@ func TestValidate_narrationPerSelectedLanguage(t *testing.T) {
 			name:  "text for unselected languages is ignored",
 			file:  "valid/en-pl.yaml",
 			langs: []string{"en"},
+		},
+		{
+			name:  "empty narration is an entry: the step stays silent",
+			file:  "valid/silent-narration.yaml",
+			langs: []string{"en", "pl"},
 		},
 		{
 			name:  "un-narrated steps need nothing",

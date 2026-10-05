@@ -144,10 +144,10 @@
       "properties": {
         "action": { "enum": ["goto", "click", "fill", "select", "press", "hover", "scroll", "wait"] },
         "narration": {
-          "description": "Spoken text per language code. Must contain every selected language. Text for unselected languages is ignored.",
+          "description": "Spoken text per language code. Must contain every selected language; an empty string keeps the step silent in that language. Text for unselected languages is ignored.",
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/lang" },
-          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 1000 }
+          "additionalProperties": { "type": "string", "maxLength": 1000 }
         }
       },
       "allOf": [

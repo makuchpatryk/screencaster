@@ -233,7 +233,7 @@ None identified by user.
   - `steps` (array, required, 1–200 items)
   - Each step:
     - `action` (required, one of `goto | click | fill | select | press | hover | scroll | wait`)
-    - `narration` (optional object keyed by language code (`en`, `pl`, `de`, …), each a non-empty string ≤ 1000 chars; must contain text for every selected language; text for unselected languages is allowed and ignored; this cross-field rule is checked in code after schema validation)
+    - `narration` (optional object keyed by language code (`en`, `pl`, `de`, …), each a string ≤ 1000 chars, where an empty string keeps the step silent in that language; must contain an entry for every selected language; text for unselected languages is allowed and ignored; this cross-field rule is checked in code after schema validation)
     - Action-specific fields:
       - `goto`: `url` (required)
       - `click`, `hover`: `selector` (required)

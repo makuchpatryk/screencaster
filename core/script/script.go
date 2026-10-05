@@ -301,7 +301,8 @@ func dedupe(in []string) []string {
 }
 
 // Validate checks the rules the schema cannot express: a narrated step needs
-// text for every selected language (FR-002). Text for unselected languages is
+// an entry for every selected language (FR-002). An empty string is an entry:
+// the step stays silent in that language. Text for unselected languages is
 // allowed and ignored.
 func Validate(s Script, langs []string) failure.ValidationErrors {
 	var errs failure.ValidationErrors
@@ -310,7 +311,7 @@ func Validate(s Script, langs []string) failure.ValidationErrors {
 			continue // un-narrated step
 		}
 		for _, lang := range langs {
-			if step.Narration[lang] == "" {
+			if _, ok := step.Narration[lang]; !ok {
 				errs = append(errs, failure.ValidationError{
 					Pointer: fmt.Sprintf("/steps/%d/narration", i),
 					Message: "missing narration for language " + lang,
