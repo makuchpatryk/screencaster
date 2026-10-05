@@ -16,6 +16,9 @@ coverage.html
 # Render output (outputDir default: output/ next to each demo, decision 62) and scratch
 output/
 .screencaster/
+demos/cli-demo/
+demos/portfolio-projects.yaml
+demos/assets/
 
 # Vendor (uncomment if not vendoring)
 # vendor/
