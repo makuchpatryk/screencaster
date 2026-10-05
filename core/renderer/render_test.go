@@ -462,6 +462,9 @@ func TestRender_customImageSkipsScreenshot(t *testing.T) { // decision 63
 	if got := f.asmIn[0].Intro; !reflect.DeepEqual(got, want) {
 		t.Errorf("Intro = %+v, want the custom image %+v", got, want)
 	}
+	if got := f.recIn[0].StartImage; got != want.Path {
+		t.Errorf("StartImage = %q, want the intro picture %q", got, want.Path)
+	}
 }
 
 func TestRender_cardsOffGiveNoStills(t *testing.T) { // decision 63
@@ -479,6 +482,9 @@ func TestRender_cardsOffGiveNoStills(t *testing.T) { // decision 63
 	}
 	if asm := f.asmIn[0]; asm.Intro != nil || asm.Outro != nil {
 		t.Errorf("stills = %+v, %+v, want none", asm.Intro, asm.Outro)
+	}
+	if got := f.recIn[0].StartImage; got != "" {
+		t.Errorf("StartImage = %q, want none without an intro", got)
 	}
 }
 

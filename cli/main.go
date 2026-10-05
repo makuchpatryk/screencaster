@@ -67,6 +67,7 @@ func render(ctx context.Context, req renderer.Request) ([]renderer.Output, error
 			BaseURL:      o.BaseURL,
 			StorageState: o.StorageState,
 			VideoDir:     o.VideoDir,
+			StartImage:   o.StartImage,
 			Visuals:      true,
 		})
 	}

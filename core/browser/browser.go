@@ -6,10 +6,13 @@ package browser
 import (
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -38,6 +41,7 @@ type Options struct {
 	BaseURL      string
 	StorageState *script.StorageState // nil: fresh, logged-out session
 	VideoDir     string               // record a video of the page into this directory
+	StartImage   string               // PNG or JPEG the recorded page shows until the first goto paints
 	Visuals      bool                 // inject the cursor overlay (FR-006)
 }
 
@@ -51,12 +55,35 @@ type Session struct {
 	record  bool
 	stop    func() bool // detaches the ctx watcher
 
+	startHTML string // what the recorded page shows before the first goto
+
 	closeOnce sync.Once
 	videoPath string
 	closeErr  error
 }
 
 var _ executor.Page = (*Session)(nil)
+
+// startColor is the built-in card's background (core/card/card.html), so the
+// recording opens in the same colour as the start card before the first page
+// loads.
+const startColor = "#0f172a"
+
+// startPage is the HTML the recorded page shows before the first goto paints:
+// the start card's picture, fitted like the assembler fits it, on startColor.
+// With no picture it is the colour alone.
+func startPage(image string) (string, error) {
+	body := ""
+	if image != "" {
+		data, err := os.ReadFile(image)
+		if err != nil {
+			return "", fmt.Errorf("read start image: %w", err)
+		}
+		body = fmt.Sprintf(`<img src="data:%s;base64,%s" style="display:block;width:100vw;height:100vh;object-fit:contain">`,
+			http.DetectContentType(data), base64.StdEncoding.EncodeToString(data))
+	}
+	return `<body style="margin:0;background:` + startColor + `">` + body, nil
+}
 
 // Launch starts the driver, Chromium and a fresh context. No page exists yet,
 // so recording has not begun: Start creates the page, and the recorder takes
@@ -78,6 +105,12 @@ func (l Launcher) Launch(ctx context.Context, o Options) (*Session, error) {
 		return nil, fmt.Errorf("start playwright: %w", err)
 	}
 	s := &Session{pw: pw, record: o.VideoDir != ""}
+	if s.record {
+		if s.startHTML, err = startPage(o.StartImage); err != nil {
+			s.Abort()
+			return nil, err
+		}
+	}
 	if err := s.open(o); err != nil {
 		s.Abort()
 		return nil, err
@@ -183,6 +216,14 @@ func (s *Session) Start() error {
 		return fmt.Errorf("new page: %w", err)
 	}
 	s.page = page
+	if s.record {
+		// A new page is white, and stays on screen until the first goto paints,
+		// which shows as a white flash after the start card. Showing the card's
+		// picture on its colour first carries the card on instead.
+		if err := page.SetContent(s.startHTML); err != nil {
+			return fmt.Errorf("paint start page: %w", err)
+		}
+	}
 	return nil
 }
 

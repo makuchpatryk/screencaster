@@ -37,6 +37,7 @@ type LaunchOptions struct {
 	VideoDir     string
 	BaseURL      string
 	StorageState *script.StorageState
+	StartImage   string // picture the page shows until the first goto paints; "": plain
 }
 
 // Recorder records one language at a time. Launch, Now and Sleep are injected
@@ -74,6 +75,7 @@ type Input struct {
 	Dir          string // video output directory
 	BaseURL      string
 	StorageState *script.StorageState // nil: logged-out session
+	StartImage   string               // the start card's picture, continued until the first page loads
 	OnStep       func(i int)
 }
 
@@ -90,7 +92,7 @@ type Output struct {
 // ends, ctx.Err() is returned. Temp files live under in.Dir; the caller removes
 // them.
 func (r Recorder) Record(ctx context.Context, in Input) (Output, error) {
-	sess, err := r.Launch(ctx, LaunchOptions{VideoDir: in.Dir, BaseURL: in.BaseURL, StorageState: in.StorageState})
+	sess, err := r.Launch(ctx, LaunchOptions{VideoDir: in.Dir, BaseURL: in.BaseURL, StorageState: in.StorageState, StartImage: in.StartImage})
 	if err != nil {
 		return Output{}, fmt.Errorf("launch browser (%s): %w", in.Lang, err)
 	}

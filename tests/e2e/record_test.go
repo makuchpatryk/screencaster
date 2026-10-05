@@ -49,6 +49,22 @@ func TestRecord_fixtureApp(t *testing.T) {
 	}
 }
 
+// The recording opens dark: a new page is white until the first goto paints,
+// which showed as a white flash right after the start card. No step navigates
+// here, so every frame is the start page.
+func TestRecord_startsDark(t *testing.T) {
+	base := fixtureApp(t)
+	steps := []script.Step{{Action: "wait", Ms: intp(1000)}}
+
+	out, err := newRecorder(t, nil).Record(context.Background(), recordInput(t, base, "en", steps))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if y := brightestFrame(t, out.WebmPath); y >= brightnessThreshold {
+		t.Errorf("brightest frame YAVG = %.0f, want a dark recording (< %d)", y, brightnessThreshold)
+	}
+}
+
 // FR-004 AC1: each language is its own recording from a fresh context.
 func TestRecord_twoRecordingsAreIndependent(t *testing.T) {
 	base := fixtureApp(t)

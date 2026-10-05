@@ -414,6 +414,9 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, re
 		BaseURL:      plan.Script.BaseURL,
 		StorageState: plan.Script.StorageState,
 	}
+	if intro != nil {
+		in.StartImage = intro.Path // the picture carries on until the first page paints
+	}
 	if rep.progress != nil {
 		in.OnStep = func(i int) { rep.progress(lang, i+1, len(steps), steps[i].Action, executor.Target(steps[i])) }
 	}

@@ -145,6 +145,8 @@ t0 ─────────────────────────�
 
 **Lead-in (spike S1, ADR-46):** Playwright's video time 0 is about 90 ms after page creation, so a clip placed at the raw offset would play that much late. The recorder subtracts the fixed constant `recorder.LeadInCompensation` (90 ms) from every offset. No trimming. **Known limit:** the video start is bimodal (§17.1), so in some recordings the fixed constant is wrong and narration plays late.
 
+**Start page:** a new page is white and stays on screen until the first `goto` paints, so the video would flash white right after the start card. `Session.Start` therefore shows the start card's picture (`recorder.Input.StartImage`, the intro still the renderer already has) fitted on the card background (`#0f172a`), so the card carries on until the site appears; with no intro it is the colour alone. The paint happens after `t0`, so offsets are unaffected. `TestRecord_startsDark` guards the colour.
+
 ## 6. Concurrency model
 
 ### 6.1 Processes

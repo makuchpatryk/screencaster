@@ -119,6 +119,7 @@ func renderJob(wd string, discover func() (voices.Installed, error)) func(contex
 			BaseURL:      o.BaseURL,
 			StorageState: o.StorageState,
 			VideoDir:     o.VideoDir,
+			StartImage:   o.StartImage,
 			Visuals:      true,
 		})
 		if err != nil {

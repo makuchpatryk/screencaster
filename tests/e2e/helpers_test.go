@@ -5,6 +5,7 @@ package e2e
 import (
 	"bufio"
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -69,8 +70,8 @@ const brightnessThreshold = 128
 
 // flashOnset returns the presentation time of the first bright frame that
 // follows a dark one, looking only at frames from `from` on. The dark
-// requirement skips the white about:blank frames every recording starts with;
-// `from` skips an intro card, which is dark too.
+// requirement skips any white frames the recording starts with; `from` skips
+// an intro card, which is dark too.
 func flashOnset(t *testing.T, video string, from time.Duration) time.Duration {
 	t.Helper()
 	out, err := exec.Command("ffmpeg", "-v", "error", "-i", video,
@@ -107,4 +108,33 @@ func flashOnset(t *testing.T, video string, from time.Duration) time.Duration {
 	}
 	t.Fatalf("no dark-to-bright transition in %s", video)
 	return 0
+}
+
+// brightestFrame returns the highest YAVG of any frame in the video.
+func brightestFrame(t *testing.T, video string) float64 {
+	t.Helper()
+	out, err := exec.Command("ffmpeg", "-v", "error", "-i", video,
+		"-vf", "signalstats,metadata=mode=print:file=-", "-f", "null", "-").Output()
+	if err != nil {
+		t.Fatalf("ffmpeg signalstats %s: %v", video, err)
+	}
+	var max float64
+	frames := 0
+	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	for sc.Scan() {
+		v, ok := strings.CutPrefix(sc.Text(), "lavfi.signalstats.YAVG=")
+		if !ok {
+			continue
+		}
+		yavg, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			t.Fatalf("parse %q: %v", sc.Text(), err)
+		}
+		max = math.Max(max, yavg)
+		frames++
+	}
+	if frames == 0 {
+		t.Fatalf("no frames in %s", video)
+	}
+	return max
 }
