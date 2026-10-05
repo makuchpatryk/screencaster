@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -157,6 +158,40 @@ func TestRun_progressGoesToStderr(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestRun_logLinesGoToStderrAndPathsToStdout(t *testing.T) { // decision 64
+	fake := func(_ context.Context, req renderer.Request) ([]renderer.Output, error) {
+		req.Log("render start: demos/a.yaml name=a")
+		req.Progress("en", 1, 1, "goto", "/")
+		req.Log("render done in 3s")
+		return []renderer.Output{{Lang: "en", Path: "/work/demos/output/a.en.mp4"}}, nil
+	}
+	var stdout, stderr bytes.Buffer
+
+	run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, &stdout, &stderr)
+	wantErr := "render start: demos/a.yaml name=a\n[en] step 1/1 goto /\nrender done in 3s\n"
+	if stderr.String() != wantErr {
+		t.Errorf("stderr = %q, want %q", stderr.String(), wantErr)
+	}
+	if want := "/work/demos/output/a.en.mp4\n"; stdout.String() != want {
+		t.Errorf("stdout = %q, want only the output path %q", stdout.String(), want)
+	}
+}
+
+func TestRun_failedRenderPrintsItsEndLineThenTheErrorOnce(t *testing.T) { // decision 64
+	fake := func(_ context.Context, req renderer.Request) ([]renderer.Output, error) {
+		req.Log("render failed after 4s")
+		return nil, errors.New("boom")
+	}
+	var stdout, stderr bytes.Buffer
+
+	if code := run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, &stdout, &stderr); code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if want := "render failed after 4s\nboom\n"; stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
 	}
 }
 

@@ -68,9 +68,10 @@ func newRecorder(t *testing.T, launched *time.Time) recorder.Recorder {
 const brightnessThreshold = 128
 
 // flashOnset returns the presentation time of the first bright frame that
-// follows a dark one. The dark requirement skips the white about:blank frames
-// every recording starts with.
-func flashOnset(t *testing.T, video string) time.Duration {
+// follows a dark one, looking only at frames from `from` on. The dark
+// requirement skips the white about:blank frames every recording starts with;
+// `from` skips an intro card, which is dark too.
+func flashOnset(t *testing.T, video string, from time.Duration) time.Duration {
 	t.Helper()
 	out, err := exec.Command("ffmpeg", "-v", "error", "-i", video,
 		"-vf", "signalstats,metadata=mode=print:file=-", "-f", "null", "-").Output()
@@ -90,6 +91,8 @@ func flashOnset(t *testing.T, video string) time.Duration {
 				t.Fatalf("parse %q: %v", line, err)
 			}
 			pts = time.Duration(sec * float64(time.Second))
+		case pts < from:
+			// still in the intro card
 		case strings.HasPrefix(line, "lavfi.signalstats.YAVG="):
 			yavg, err := strconv.ParseFloat(strings.TrimPrefix(line, "lavfi.signalstats.YAVG="), 64)
 			if err != nil {

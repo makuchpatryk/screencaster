@@ -74,10 +74,22 @@ func render(ctx context.Context, req renderer.Request) ([]renderer.Output, error
 		TTS:    tts.Piper{Bin: piperBin},
 		Rec:    recorder.New(launch),
 		Asm:    assembler.FFmpeg{Bin: ffmpegBin, Probe: ffprobeBin},
+		Cards:  cards{},
 		Voices: installed,
 		Now:    time.Now,
 		RunID:  runID,
 	}, req)
+}
+
+// cards takes the start and end card screenshots with the real browser.
+type cards struct{}
+
+func (cards) Screenshot(ctx context.Context, shots []renderer.Shot) error {
+	bs := make([]browser.Shot, len(shots))
+	for i, s := range shots {
+		bs[i] = browser.Shot(s)
+	}
+	return browser.Launcher{}.Screenshot(ctx, bs)
 }
 
 // errRenderRunning is the PRD wording for a held render lock (ARCHITECTURE

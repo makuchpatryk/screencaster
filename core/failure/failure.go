@@ -1,5 +1,5 @@
 // Package failure holds the error types that cross the core boundary: the
-// single Failure shape for step, TTS, assembly and interruption errors, and
+// single Failure shape for step, TTS, assembly, card and interruption errors, and
 // ValidationErrors for input that is rejected before any work starts
 // (ARCHITECTURE §9).
 package failure
@@ -59,6 +59,12 @@ func TTS(i int, lang, stderr string) *Failure {
 // Assembly reports that ffmpeg failed; stderrTail is its last 20 lines.
 func Assembly(lang, stderrTail string) *Failure {
 	return &Failure{Lang: lang, Message: fmt.Sprintf("assembly failed (%s): %s", lang, stderrTail)}
+}
+
+// Cards reports that the start or end card could not be built (page or
+// screenshot); err is the cause.
+func Cards(lang string, err error) *Failure {
+	return &Failure{Lang: lang, Message: fmt.Sprintf("build cards (%s): %s", lang, err), cause: err}
 }
 
 // Interrupted marks a job that was queued or running when the server stopped

@@ -48,6 +48,8 @@ func TestParse_validSamples(t *testing.T) {
 		{"valid/en-pl.yaml", []string{"en", "pl"}, 2},
 		{"valid/all-actions.yaml", nil, 12},
 		{"valid/all-target-fields.yaml", nil, 1},
+		{"valid/cards.yaml", nil, 1},
+		{"valid/cards-text.yaml", nil, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -124,6 +126,31 @@ func TestParse_decodesTargetFields(t *testing.T) {
 	}
 }
 
+func TestParse_decodesBookends(t *testing.T) { // decision 63
+	tests := []struct {
+		file      string
+		wantIntro *Bookend
+		wantOutro *Bookend
+	}{
+		{"valid/default-langs.yaml", nil, nil},
+		{"valid/cards.yaml", &Bookend{Image: "assets/logo.png", DurationMs: 4500}, &Bookend{Off: true}},
+		{"valid/cards-text.yaml",
+			&Bookend{Title: "Projects tour", Subtitle: "Create and share a project in one minute."},
+			&Bookend{Title: "See you next time"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			s, err := Parse(readSample(t, tt.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(s.Intro, tt.wantIntro) || !reflect.DeepEqual(s.Outro, tt.wantOutro) {
+				t.Errorf("intro, outro = %+v, %+v; want %+v, %+v", s.Intro, s.Outro, tt.wantIntro, tt.wantOutro)
+			}
+		})
+	}
+}
+
 func TestParse_invalidSamples(t *testing.T) {
 	tests := []struct {
 		file        string
@@ -143,6 +170,12 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/baseurl-relative.yaml", "/baseUrl", "baseUrl must be an absolute http or https URL: /app"},
 		{"invalid/cookie-no-domain.yaml", "/storageState/cookies/0", ""},
 		{"invalid/storagestate-is-path.yaml", "/storageState", ""},
+		{"invalid/intro-true.yaml", "/intro", ""},
+		{"invalid/intro-image-and-title.yaml", "/intro", ""},
+		{"invalid/outro-image-and-subtitle.yaml", "/outro", ""},
+		{"invalid/intro-image-not-png.yaml", "/intro/image", ""},
+		{"invalid/intro-duration-short.yaml", "/intro/durationMs", ""},
+		{"invalid/intro-unknown-field.yaml", "/intro", "color"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -171,6 +204,10 @@ func TestParse_oneRootCausePerBrokenStep(t *testing.T) {
 		{"invalid/wait-ms-zero.yaml", "/steps/1/ms"},
 		{"invalid/unknown-action.yaml", "/steps/0/action"},
 		{"invalid/baseurl-relative.yaml", "/baseUrl"},
+		{"invalid/intro-true.yaml", "/intro"},
+		{"invalid/intro-image-and-title.yaml", "/intro"},
+		{"invalid/intro-image-not-png.yaml", "/intro/image"},
+		{"invalid/intro-duration-short.yaml", "/intro/durationMs"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {

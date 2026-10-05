@@ -138,6 +138,44 @@ func playwrightState(st *script.StorageState) (*playwright.OptionalStorageState,
 	return &out, nil
 }
 
+// Shot is one picture: an HTML page and the PNG path its screenshot goes to.
+type Shot struct{ HTML, Out string }
+
+// Screenshot renders every shot in one Chromium, at the video size, and writes
+// the PNGs. There is no video and no cursor; the start and end cards use it
+// (decision 63). The output directory must exist. Cancelling ctx aborts it.
+func (l Launcher) Screenshot(ctx context.Context, shots []Shot) error {
+	s, err := l.Launch(ctx, Options{})
+	if err != nil {
+		return err
+	}
+	if err := s.Start(); err != nil {
+		s.Abort()
+		return err
+	}
+	for _, sh := range shots {
+		if err := s.screenshot(sh); err != nil {
+			s.Abort()
+			return err
+		}
+	}
+	if _, err := s.Close(); err != nil {
+		return fmt.Errorf("close browser: %w", err)
+	}
+	return nil
+}
+
+func (s *Session) screenshot(sh Shot) error {
+	err := s.page.SetContent(sh.HTML, playwright.PageSetContentOptions{WaitUntil: playwright.WaitUntilStateLoad})
+	if err != nil {
+		return fmt.Errorf("load card page: %w", err)
+	}
+	if _, err := s.page.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(sh.Out)}); err != nil {
+		return fmt.Errorf("screenshot %s: %w", sh.Out, err)
+	}
+	return nil
+}
+
 // Start opens the page. When VideoDir is set, recording begins here.
 func (s *Session) Start() error {
 	page, err := s.context.NewPage()

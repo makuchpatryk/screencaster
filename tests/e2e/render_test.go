@@ -183,6 +183,17 @@ func TestRender_cli(t *testing.T) {
 	if !strings.Contains(en.stderr, "[en] step 4/16 click role=button[name=\"New project\"]") {
 		t.Errorf("progress line missing from stderr:\n%s", en.stderr)
 	}
+	// Decision 64: a start summary, one line per phase, an end summary.
+	for _, want := range []string{"render start: demos/e2e-demo.yaml name=e2e-demo languages=en ", "[en] narration: 3 clips in ", "[en] cards: 2 built in ",
+		"[en] recorded in ", "[en] assembled ", "render done in "} {
+		if !strings.Contains(en.stderr, want) {
+			t.Errorf("log line %q missing from stderr:\n%s", want, en.stderr)
+		}
+	}
+	// Decision 62: the video lands next to the demo.
+	if got, want := filepath.Dir(enPaths[0]), filepath.Join(dir, "demos", "output"); got != want {
+		t.Errorf("video in %s, want %s", got, want)
+	}
 
 	// EN + PL (FR-004 AC1), timed for NFR-001.
 	both := runCLI(t, bin, dir, "render", "demos/e2e-demo.yaml", "--lang", "en,pl")
@@ -213,7 +224,7 @@ func TestRender_cli(t *testing.T) {
 		t.Errorf("NFR-001: render took %v, more than 2x the %v of output", both.elapsed, total)
 	}
 
-	assertDrift(t, enPaths[0])
+	assertDrift(t, enPaths[0], defaultCard) // the script has the default 3 s intro
 
 	if left, _ := filepath.Glob(filepath.Join(dir, ".screencaster", "tmp", "*")); len(left) > 0 {
 		t.Errorf("temp dirs left behind: %v", left)
@@ -236,7 +247,10 @@ func TestRender_cliFailureLeavesOutputUnchanged(t *testing.T) {
 	if res.stdout != "" {
 		t.Errorf("stdout = %q, want no paths", res.stdout)
 	}
-	if entries, _ := os.ReadDir(filepath.Join(dir, "output")); len(entries) > 0 {
+	if !strings.Contains(res.stderr, "render failed after ") {
+		t.Errorf("stderr lacks the end line:\n%s", res.stderr)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(dir, "demos", "output")); len(entries) > 0 {
 		t.Errorf("output dir has %d entries, want none", len(entries))
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, ".screencaster", "tmp", "*")); len(left) > 0 {
@@ -357,11 +371,14 @@ func assertVideo(t *testing.T, path string) time.Duration {
 	return time.Duration(sec * float64(time.Second))
 }
 
+// defaultCard is how long the built-in start and end cards are shown.
+const defaultCard = 3 * time.Second
+
 // assertDrift compares the marker flash with the start of its narration clip
 // in the final MP4 (FR-007 AC asks ±100 ms; the test allows maxDrift). The clip's own leading silence is
 // measured on a fresh synthesis of the same text and subtracted, so only the
 // placement error remains.
-func assertDrift(t *testing.T, mp4 string) {
+func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
 	t.Helper()
 	clip := filepath.Join(t.TempDir(), "marker.wav")
 	if _, err := (tts.Piper{Bin: "/opt/piper/piper"}).Synthesize(context.Background(),
@@ -370,7 +387,7 @@ func assertDrift(t *testing.T, mp4 string) {
 	}
 	lead := leadSilence(t, clip)
 
-	flash := flashOnset(t, mp4)
+	flash := flashOnset(t, mp4, intro) // narration and picture are both shifted by the intro
 	// The clip before the marker ends seconds earlier, so the first sound
 	// after (flash - 1 s) is the marker narration.
 	onset := firstSoundAfter(t, mp4, flash-time.Second)

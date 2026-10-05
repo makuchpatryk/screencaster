@@ -30,9 +30,9 @@ Build for the PRD, not for what might come.
 
 - Delete code with no caller: unused functions, struct fields, config keys, schema properties.
 - Keep PRD §10.3 out: login steps, masking, other formats, cloud TTS, web UI, auto-deletion, CI-triggered renders, schema-only tool.
-- Keep PRD §10.2 out: slides, overlays, multi-tenancy. No hooks "for later" beyond what ARCHITECTURE §15 already names.
+- Keep PRD §10.2 out: slides between steps, overlays, multi-tenancy (the start and end cards are in, decision 63). No hooks "for later" beyond what ARCHITECTURE §15 already names.
 - No second TTS engine, browser, storage backend or output format. Only languages are open-ended (BR-002).
-- `Recorder`, `Synthesizer` and `Assembler` interfaces (in `core/renderer`) and `Page`/`Session` (in `core/executor`/`core/recorder`) exist as test seams, not for swapping Chromium, Piper or ffmpeg. No interface without a test seam.
+- `Recorder`, `Synthesizer`, `Assembler` and `Cards` interfaces (in `core/renderer`) and `Page`/`Session` (in `core/executor`/`core/recorder`) exist as test seams, not for swapping Chromium, Piper or ffmpeg. No interface without a test seam.
 - No retries, backoff or configurable timeouts. BR-004: one 30 s timeout, then abort.
 - No scale design. One worker, one SQLite file, one render at a time (BR-008).
 
@@ -49,6 +49,9 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 | Step semantics (FR-005) and URL resolution against `baseUrl` (BR-010) | `core/executor`, shared by render and `explore_page` |
 | Failure shape `{step, lang, action, target, message}` | `core/failure`, used by CLI output, MCP tool errors and `jobs.error_json` |
 | Output filename and timestamp format (FR-010) | one function in `core/renderer` |
+| Card text and the closing line per language | `core/card` (`HTML`, `Outro`); the intro/outro defaults come from `renderer.Prepare` |
+| Path base of a demo (output folder, card images) | `renderer.Prepare`: the demo's folder, then the inside-the-work-dir check |
+| Render log wording | `core/renderer` (`Request.Log`); callers only choose where the lines go |
 | 30 s timeout, 25 cursor steps, 60 ms/char, 1920×1080, 30 fps | named constants in the owning package |
 | Job statuses and transitions | typed constants in `mcp/queue`. Nothing else compares status strings |
 | Audience values | `script.Audiences`; a test keeps it equal to the schema enum |
@@ -66,6 +69,7 @@ Layout: ARCHITECTURE §3.
 |---|---|---|
 | `core/script` | parse and validate input into typed values | start processes or touch the browser |
 | `core/voices`, `core/failure` | pure resolution and error types | do I/O beyond listing voice files |
+| `core/card` | build the card page and closing line from text | do I/O, start a process or pick the language to render |
 | `core/tts`, `core/assembler`, `core/browser` | wrap one external tool each | know about jobs, language policy or the queue |
 | `core/executor` | run one step | decide timing between steps or know about narration |
 | `core/recorder` | run one language's steps, record offsets (BR-003) | publish files or pick output names |
@@ -81,7 +85,7 @@ Hard rules:
 - `core` imports neither SQLite nor the MCP SDK.
 - Only `core/tts`, `core/assembler` and `core/browser` call `os/exec` or playwright-go.
 - Domain rules (validation, language and voice resolution) live in `core`, never in `main` or a handler.
-- Paths, `baseUrl` and `outputDir` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself.
+- Paths (`outputDir`, card images) and `baseUrl` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself.
 - `screencaster-mcp` never writes to stdout except protocol frames. Logs go to stderr (ARCHITECTURE §12).
 
 ## SOLID
@@ -95,7 +99,7 @@ Applied to packages, functions and small structs.
 - New step action = schema entry plus one case in the executor's single dispatch.
 - New failure kind = a constructor for the shared `Failure`, not a new path through CLI and MCP.
 
-**Liskov substitution.** Fakes of `Recorder`, `Synthesizer`, `Assembler` and `Session` return the same error types, respect `ctx` cancellation and leave no files behind, like the real ones. The executor behaves identically in both modes except visuals, so an explore selector works in a render (FR-017 AC3).
+**Liskov substitution.** Fakes of `Recorder`, `Synthesizer`, `Assembler`, `Cards` and `Session` return the same error types, respect `ctx` cancellation and leave no files behind, like the real ones. The executor behaves identically in both modes except visuals, so an explore selector works in a render (FR-017 AC3).
 
 **Interface segregation.** Interfaces are small and declared by the consumer (`renderer` declares the 1–3 methods it needs). Functions take what they use: `resolveVoices(langs, scriptVoices, installed)` takes maps and a set, not the whole `Script`.
 
@@ -165,6 +169,6 @@ Everything not in this table is a review point.
 - The fixed 90 ms lead-in (ADR-46) is wrong when the WebM start lands in its late mode (~590 ms, ARCHITECTURE §17.1), so narration plays late in some renders. The e2e drift bound is ±150 ms, not FR-007's ±100 ms (`maxDrift`). Measure the lead-in per recording, then tighten the bound.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
 - `modernc.org/sqlite` is pinned to v1.50.0 in `mcp/go.mod`, the newest release that builds on Go 1.25 (v1.60 needs 1.26). Bump it together with the Go version.
-- `cli/main.go` and `mcp/main.go` both wire Piper, ffmpeg, the recorder and `renderer.Deps` by hand, with the same image paths. That is two copies; extract a shared constructor on the third.
+- `cli/main.go` and `mcp/main.go` both wire Piper, ffmpeg, the recorder, the `cards` adapter (`browser.Shot` from `renderer.Shot`) and `renderer.Deps` by hand, with the same image paths. That is two copies; extract a shared constructor on the third.
 - The `>> nth=<i>` suffix from `explore_page` assumes the matches appear in the snapshot in DOM order. It holds for ordinary pages; a page that reorders elements visually only is not covered.
 - `explore_page` actions go through `script.ValidateSteps`, so a `fill` with an empty `value` is reported as a missing `value` (the empty string is dropped when the steps are encoded). Clearing a field is not needed to find selectors.

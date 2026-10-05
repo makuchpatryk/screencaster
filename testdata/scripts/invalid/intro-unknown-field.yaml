@@ -1,0 +1,7 @@
+name: demo
+baseUrl: http://host.docker.internal:3000
+intro:
+  color: red
+steps:
+  - action: goto
+    url: /

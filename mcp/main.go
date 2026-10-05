@@ -135,10 +135,15 @@ func renderJob(wd string, discover func() (voices.Installed, error)) func(contex
 			TTS:    tts.Piper{Bin: piperBin},
 			Rec:    recorder.New(launch),
 			Asm:    assembler.FFmpeg{Bin: ffmpegBin, Probe: ffprobeBin},
+			Cards:  cards{},
 			Voices: installed,
 			Now:    time.Now,
 			RunID:  func() string { return job.ID },
-		}, renderer.Request{WorkDir: wd, ScriptPath: job.ScriptPath, LangOverride: job.Languages})
+		}, renderer.Request{
+			WorkDir: wd, ScriptPath: job.ScriptPath, LangOverride: job.Languages,
+			// slog goes to stderr; stdout stays protocol-only (ARCHITECTURE §12).
+			Log: func(msg string) { slog.Info(msg, "job", job.ID) },
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -148,6 +153,17 @@ func renderJob(wd string, discover func() (voices.Installed, error)) func(contex
 		}
 		return res, nil
 	}
+}
+
+// cards takes the start and end card screenshots with the real browser.
+type cards struct{}
+
+func (cards) Screenshot(ctx context.Context, shots []renderer.Shot) error {
+	bs := make([]browser.Shot, len(shots))
+	for i, s := range shots {
+		bs[i] = browser.Shot(s)
+	}
+	return browser.Launcher{}.Screenshot(ctx, bs)
 }
 
 // acquireLock waits for the render lock the CLI also uses, so a job stays

@@ -15,6 +15,7 @@ func TestFailure_messageFormats(t *testing.T) {
 	}{
 		{"tts (FR-003)", TTS(3, "pl", "boom"), "tts failed at step 3 (pl): boom"},
 		{"assembly (FR-009)", Assembly("en", "line1\nline2"), "assembly failed (en): line1\nline2"},
+		{"cards (decision 63)", Cards("pl", errors.New("chromium crashed")), "build cards (pl): chromium crashed"},
 		{"interrupted (BR-009)", Interrupted(), "interrupted"},
 		{
 			"step carries BR-004 fields",

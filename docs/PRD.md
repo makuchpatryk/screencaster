@@ -148,9 +148,11 @@ None identified by user.
 - Piper TTS (EN and PL voices built in, other languages via extra voice files), narration synchronized per BR-003.
 - SQLite-backed FIFO job queue.
 - Docker image containing everything.
+- A start card and an end card on every video (built in, replaceable by the developer's own picture, or off).
+- Render log lines on stderr: start summary, one line per phase, end summary.
 
 ### 10.2 Post-MVP
-- Slides (intro/outro, interleaved between browser segments).
+- Slides interleaved between browser segments (the start and end cards are MVP, decision 63).
 - Overlays (captions, callouts, element highlights).
 - Commercial / multi-tenant version.
 
@@ -209,13 +211,15 @@ None identified by user.
 - **Inputs / validation:** Top-level script fields:
   - `baseUrl` (string, required, absolute http/https URL; e.g. `http://host.docker.internal:3000`)
   - `storageState` (object, optional; Playwright's storage state: `cookies` and `origins` with `localStorage`, defined in the schema; omit for a fresh, logged-out session; it holds secrets, so the script stays out of git)
-  - `outputDir` (string, optional, relative to the working dir and inside it, default `output`)
+  - `outputDir` (string, optional, relative to the demo file's folder and inside the working dir, default `output`, so the videos of `demos/x.yaml` land in `demos/output/`)
+  - `intro`, `outro` (optional; `false` for no card, or an object `{image?, title?, subtitle?, durationMs?}`; see FR-009). `image` is a path to a PNG or JPEG, relative to the demo file's folder and inside the working dir
   - `voices` (object, optional; keys are language codes, values are Piper voice names; built-in defaults: `en` → `en_US-ryan-high`, `pl` → `pl_PL-darkman-medium`)
-- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A `storageState` that is not an object of that shape (a path string, a cookie with neither `url` nor `domain` and `path`) → a schema validation error at `/storageState...`, reported together with the script and voice errors. An `outputDir` that resolves outside the working dir (`..` or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>`, because the script is written by an LLM. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
+- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A `storageState` that is not an object of that shape (a path string, a cookie with neither `url` nor `domain` and `path`) → a schema validation error at `/storageState...`, reported together with the script and voice errors. An `outputDir` that resolves outside the working dir (`..` past it or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>`, because the script is written by an LLM; so is a script outside the working dir whose default `output` folder would be outside too. An `intro` or `outro` `image` follows the same rule (`/intro/image: intro.image must stay inside the working directory: <value>`), must exist (`/intro/image: image not found: <absolute path>`) and must be a regular file with a `.png`, `.jpg` or `.jpeg` name whose first bytes are those of a PNG or JPEG (`/intro/image: image is not a PNG or JPEG: <absolute path>`); `image` together with `title` or `subtitle`, `intro: true` and a `durationMs` outside 500–10000 are schema errors. All of it is checked before any browser or TTS work. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
 - **Acceptance criteria:**
   - Given a script without `baseUrl`, when any render starts, then it fails schema validation (`/baseUrl`) before launching a browser.
   - Given a script without `voices`, when rendering `en`, then the audio uses `en_US-ryan-high`; when rendering `pl`, then it uses `pl_PL-darkman-medium`.
   - Given a work dir that holds only the demo file, when a public site is rendered, then it succeeds with no storageState.
+  - Given `demos/x.yaml` with no `outputDir`, when it renders, then the MP4 is in `demos/output/`.
 
 ### FR-002: Script schema & validation
 - **Implements:** BR-001, BR-002, BR-010
@@ -310,20 +314,23 @@ None identified by user.
   2. transcode the recording to H.264 MP4, 30 fps, 1920×1080, AAC audio;
   3. mux them together;
   4. set the output duration to the video length;
-  5. write `meta.title` and `meta.description` as the MP4 `title` and `comment` tags when present.
-- **Edge cases:** ffmpeg exits non-zero → job fails with `assembly failed (<lang>): <stderr last 20 lines>`.
+  5. put a start card before the recording and an end card after it (unless `false`), each shown for `durationMs` (default 3000 ms), scaled to fit 1920×1080 at 30 fps. The built-in card is an HTML page drawn by Chromium: the `intro` shows `meta.title` (or `name`) and `meta.description`, the `outro` shows a closing line in the language of the video (`en`: Thank you for watching, `pl`: Dziękujemy za uwagę, other languages: English) and the title. `title` and `subtitle` replace the text; `image` shows the picture instead, on a dark background where it does not fill the frame. Clip offsets are placed after the start card; the cards carry no narration;
+  6. write `meta.title` and `meta.description` as the MP4 `title` and `comment` tags when present.
+- **Edge cases:** ffmpeg exits non-zero → job fails with `assembly failed (<lang>): <stderr last 20 lines>`. The card page cannot be drawn → the job fails with `build cards (<lang>): <message>` before the recording starts.
 - **Acceptance criteria:**
   - Given a successful recording, when assembled, then `ffprobe` reports h264, 1920×1080, 30 fps, and an aac stream.
+  - Given a script with no `intro` or `outro`, when rendered, then the video lasts the recording plus 6 s and its first and last 3 s are the built-in cards.
+  - Given `intro: {image: assets/logo.png}` and `outro: false`, when rendered, then the first 3 s show that picture and the video ends with the recording.
 
 ### FR-010: Output naming
 - **Implements:** BR-006, BR-007
-- **Description:** Outputs must be written to `<outputDir>/<name>.<lang>.<timestamp>.mp4`. `timestamp` is the job start time in UTC, format `YYYYMMDDTHHMMSSZ`, and is shared by all files of one job. Files are written to a temp path and moved into place only after all selected languages succeed.
+- **Description:** Outputs must be written to `<outputDir>/<name>.<lang>.<timestamp>.mp4`, with `outputDir` resolved against the demo's folder (FR-001). `timestamp` is the job start time in UTC, format `YYYYMMDDTHHMMSSZ`, and is shared by all files of one job. Files are written to a temp path and moved into place only after all selected languages succeed.
 - **Acceptance criteria:**
   - Given two default renders of `create-project`, when both succeed, then two EN files with different timestamps exist and none were overwritten.
 
 ### FR-011: CLI
 - **Implements:** BP-003
-- **Description:** The `screencaster` binary must provide `screencaster render <script-path> [--lang en,pl]` (`--lang` overrides the script's `languages`), which runs FR-001…FR-010 synchronously without touching the job queue. Exit code 0 on success, 1 on any failure.
+- **Description:** The `screencaster` binary must provide `screencaster render <script-path> [--lang en,pl]` (`--lang` overrides the script's `languages`), which runs FR-001…FR-010 synchronously without touching the job queue. Exit code 0 on success, 1 on any failure. It prints on stderr a start summary (script, languages, voices, step count, output dir), the step progress, one line per phase and language with its elapsed time (narration, cards, recording, assembly) and an end summary (output paths, video durations, total time); a failed render prints `render failed after <time>` and then the error once. The paths of the videos go to stdout. The MCP server writes the same lines to its stderr log with the job id.
 - **Acceptance criteria:**
   - Given a valid script, when `screencaster render` runs, then it prints the output path(s) and exits 0.
 
@@ -436,7 +443,7 @@ None identified by user.
 | error_json | TEXT | no | JSON `{step,lang,action,target,message}` | set on failure; `interrupted` uses `{message:"interrupted"}` |
 
 ### Files (no DB)
-- `demos/*.yaml` (scripts, each with its own target settings), `<outputDir>/*.mp4`.
+- `demos/*.yaml` (scripts, each with its own target settings), `<outputDir>/*.mp4` (default `demos/output/` for `demos/x.yaml`).
 - **Relations:** One job → zero or more MP4 files (one per selected language).
 - **Retention / deletion:** Forever; manual deletion only (BR-007).
 
@@ -588,6 +595,9 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 59 | `explore_page` takes an absolute `url` plus an optional `storageState`. The url is also the base for relative gotos in `actions` | Relative path plus a config `baseUrl` | User choice. No config to read; the explorer needs no change. |
 | 60 | No project-level voice defaults. Voice resolution is script, then built-in | Keep config `voices`; env-var defaults | Follows from 58. The script already carries per-demo `voices`, so a project level only added a second source. |
 | 61 | `storageState` is an inline object in the script (and in `explore_page`), not a path to a file. Supersedes the file form of 15, 58 and 59 | Path to a Playwright JSON file | User choice. A demo is then truly one self-contained file, with no second file to mount, check or leak a path from. The schema defines the shape; secrets now live in the demo, so it stays out of git. |
+| 62 | Every path in a demo resolves against the demo file's folder and must stay inside the working directory: `outputDir` (default `<demo dir>/output`) and a card `image`. Supersedes the "paths relative to the demo file" rejection in 58 | Paths relative to the working directory | User choice. A demo, its output and its pictures move together. The inside-the-work-dir rule stays because the script is LLM-written. A script outside the work dir has its default output outside too, so it needs an explicit absolute `outputDir` inside it. |
+| 63 | Every video gets a 3 s start card and a 3 s end card by default. The built-in card is an HTML page screenshotted by Chromium, joined to the recording by ffmpeg; `intro`/`outro` set a picture, text, time, or `false`. Moves the start and end cards from 10.2 into the MVP; interleaved slides stay post-MVP | Opt-in cards; ffmpeg `drawtext`; Go image rendering; cards recorded as browser pages | User choice. The output looks finished without an editing step. Chromium is already in the image, wraps long text and has the Polish glyphs. |
+| 64 | Render log lines are built in `core/renderer` and handed to `Request.Log`; the CLI prints them on stderr, the MCP worker writes them to `slog` with the job id | A `*slog.Logger` in the dependencies | One place for the wording, plain lines in the CLI (no `time=… level=…`), no stdout in the MCP server. |
 
 ## 21. Open Questions
 None.
@@ -598,5 +608,6 @@ None.
 | Script | YAML file in `demos/` describing steps and narration for one demo. Sets `languages` (default `["en"]`) and other metadata. |
 | Step | One action plus optional `narration` (keyed by language code: `en`, `pl`, etc.). Narration text is required for every selected language. |
 | Job | One queued/running/completed render of a script, producing one MP4 per selected language. (Not limited to EN and PL; any language with an installed voice is rendered.) |
+| Card | The start (`intro`) or end (`outro`) picture of a video, 3 s by default: built in, or the developer's own `image`. Has no narration. |
 | storageState | Playwright storage state (cookies/localStorage) used to start a logged-in session. Written inline in the demo script (optional). |
 | Piper | Local open-source neural TTS engine. Voices and languages are pluggable via `/work/voices/*.onnx` files. |

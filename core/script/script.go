@@ -42,7 +42,36 @@ type Script struct {
 	Languages    []string          `json:"languages"`
 	Voices       map[string]string `json:"voices"`
 	Meta         *Meta             `json:"meta"`
+	Intro        *Bookend          `json:"intro"`
+	Outro        *Bookend          `json:"outro"`
 	Steps        []Step            `json:"steps"`
+}
+
+// DefaultCardMs is how long a start or end card is shown unless the script
+// says otherwise (ARCHITECTURE §5, decision 63).
+const DefaultCardMs = 3000
+
+// Bookend is the start or end card. A nil *Bookend in Script means the
+// built-in card with default text; Off means no card. Image, when set, is a
+// path relative to the demo file's folder and replaces the built-in card, so
+// the schema rejects it together with Title or Subtitle.
+type Bookend struct {
+	Off        bool   `json:"-"`
+	Image      string `json:"image"`
+	Title      string `json:"title"`
+	Subtitle   string `json:"subtitle"`
+	DurationMs int    `json:"durationMs"`
+}
+
+// UnmarshalJSON maps the schema's `false` to Off. Nothing else is custom: the
+// schema already rejected `true` and every other scalar.
+func (b *Bookend) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "false" {
+		*b = Bookend{Off: true}
+		return nil
+	}
+	type plain Bookend // no methods, so no recursion
+	return json.Unmarshal(data, (*plain)(b))
 }
 
 // StorageState is the session the browser starts with, in the shape of

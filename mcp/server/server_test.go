@@ -247,6 +247,31 @@ func TestRenderVideo_scriptOutsideWorkDirIsRefused(t *testing.T) {
 	}
 }
 
+// Decision 63: a card image that is missing or outside the working directory
+// is refused at submit time, with its pointer and no job row (FR-002).
+func TestRenderVideo_cardImageProblemsAreRefusedBeforeAJob(t *testing.T) {
+	e := newEnv(t)
+	e.writeFile("demos/missing.yaml", strings.Replace(validScript, "steps:", "intro:\n  image: assets/logo.png\nsteps:", 1))
+	e.writeFile("demos/outside.yaml", strings.Replace(validScript, "steps:", "outro:\n  image: ../../logo.png\nsteps:", 1))
+	e.writeFile("demos/ok.yaml", strings.Replace(validScript, "steps:", "intro:\n  image: assets/logo.png\nsteps:", 1))
+
+	for _, c := range []struct{ script, want string }{
+		{"demos/missing.yaml", "/intro/image: image not found: " + filepath.Join(e.work, "demos/assets/logo.png")},
+		{"demos/outside.yaml", "/outro/image: outro.image must stay inside the working directory: ../../logo.png"},
+	} {
+		res := e.call(t, "render_video", map[string]any{"script": c.script})
+		if !res.IsError || text(res) != c.want {
+			t.Errorf("%s: %v %q, want error %q", c.script, res.IsError, text(res), c.want)
+		}
+	}
+
+	e.writeFile("demos/assets/logo.png", "\x89PNG\r\n\x1a\ndata")
+	out := decode[renderOut](t, e.call(t, "render_video", map[string]any{"script": "demos/ok.yaml"}))
+	if out.Position != 1 {
+		t.Errorf("script with an existing image = %+v, want queued at 1 (the refused calls left no row)", out)
+	}
+}
+
 // Decision 58: the work dir holds the demo and nothing else, and a bad
 // storageState is refused at submit time with no job row.
 func TestRenderVideo_needsNoProjectConfig(t *testing.T) {

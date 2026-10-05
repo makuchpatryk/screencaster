@@ -1,0 +1,10 @@
+# Start and end cards: a custom image with a longer time, and no end card.
+name: cards
+baseUrl: https://example.com/app
+intro:
+  image: assets/logo.png
+  durationMs: 4500
+outro: false
+steps:
+  - action: goto
+    url: /

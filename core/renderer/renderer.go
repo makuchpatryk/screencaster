@@ -5,6 +5,7 @@
 package renderer
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"screencaster/core/assembler"
+	"screencaster/core/card"
 	"screencaster/core/executor"
 	"screencaster/core/failure"
 	"screencaster/core/recorder"
@@ -34,12 +36,15 @@ const (
 
 // Request says what to render. ScriptPath is relative to WorkDir unless
 // absolute. A non-empty LangOverride wins over the script's languages (BR-002).
-// Progress, when set, is told about each step right before it runs.
+// Progress, when set, is told about each step right before it runs. Log, when
+// set, gets one line per render event (start, each phase, end); the wording is
+// built here, callers only choose where the lines go (decision 64).
 type Request struct {
 	WorkDir      string
 	ScriptPath   string
 	LangOverride []string
 	Progress     Progress
+	Log          func(msg string)
 }
 
 // Progress reports step i (1-based) of n for lang; target is the selector or
@@ -63,12 +68,23 @@ type Assembler interface {
 	Assemble(ctx context.Context, in assembler.Input) (int64, error)
 }
 
+// Shot is one card picture to take: an HTML page and the PNG path it goes to.
+// It mirrors browser.Shot, so renderer does not import the browser wrapper.
+type Shot struct{ HTML, Out string }
+
+// Cards takes the screenshots of the built-in start and end cards, all in one
+// browser launch (core/browser).
+type Cards interface {
+	Screenshot(ctx context.Context, shots []Shot) error
+}
+
 // Deps are the collaborators and the environment of a render, wired in main.
 // Now and RunID are injected so tests get fixed names (CODE_QUALITY, SOLID).
 type Deps struct {
 	TTS    Synthesizer
 	Rec    Recorder
 	Asm    Assembler
+	Cards  Cards
 	Voices voices.Installed
 	Now    func() time.Time
 	RunID  func() string
@@ -87,12 +103,27 @@ type Plan struct {
 	Script    script.Script
 	Languages []string
 	Voices    map[string]string // language -> .onnx path
+	DemoDir   string            // absolute; every path in the demo resolves against it (decision 62)
 	OutputDir string            // absolute
+	Intro     Card
+	Outro     Card
 }
 
-// Prepare validates script, narration, voices and output directory without
-// starting any browser, TTS or ffmpeg work (FR-001, FR-002, BR-011). Problems
-// with the script, voices and output directory come back together as
+// Card is a resolved start or end card. Off means none. Image, when not empty,
+// is the absolute path of the picture to show; otherwise the built-in card is
+// drawn from Title and Subtitle. An empty Title on the outro stands for the
+// closing line of each language (card.Outro), filled in per language.
+type Card struct {
+	Off      bool
+	Image    string
+	Title    string
+	Subtitle string
+	Duration time.Duration
+}
+
+// Prepare validates script, narration, voices, output directory and card
+// images without starting any browser, TTS or ffmpeg work (FR-001, FR-002,
+// BR-011). Problems with the script, voices and paths come back together as
 // failure.ValidationErrors.
 func Prepare(req Request, installed voices.Installed) (Plan, error) {
 	path := resolve(req.WorkDir, req.ScriptPath)
@@ -114,13 +145,26 @@ func Prepare(req Request, installed voices.Installed) (Plan, error) {
 	paths, voiceErrs := voices.Resolve(langs, s.Voices, installed)
 	errs = append(errs, voiceErrs...)
 
-	// The script is written by an LLM, so the output path it names must stay
-	// inside the working directory (the mounted project).
-	outputDir := cmp.Or(s.OutputDir, defaultOutputDir)
-	outputDir, ok := within(req.WorkDir, outputDir)
+	// Paths in a demo resolve against the demo's folder, so a demo and its
+	// output and images move together (decision 62). The script is written by
+	// an LLM, so every path it names must still stay inside the working
+	// directory (the mounted project).
+	demoDir := filepath.Dir(path)
+	outputDir, ok := within(req.WorkDir, resolve(demoDir, cmp.Or(s.OutputDir, defaultOutputDir)))
 	if !ok {
-		errs = append(errs, failure.ValidationError{Pointer: "/outputDir", Message: outsideWorkDir("outputDir", s.OutputDir)})
+		// With no outputDir the folder is the default one next to the demo, so
+		// the message names it instead of an empty value.
+		errs = append(errs, failure.ValidationError{Pointer: "/outputDir", Message: outsideWorkDir("outputDir", cmp.Or(s.OutputDir, outputDir))})
 	}
+
+	title, description := s.Name, ""
+	if m := s.Meta; m != nil {
+		title, description = cmp.Or(m.Title, s.Name), m.Description
+	}
+	intro, introErrs := resolveCard("intro", s.Intro, Card{Title: title, Subtitle: description}, demoDir, req.WorkDir)
+	outro, outroErrs := resolveCard("outro", s.Outro, Card{Subtitle: title}, demoDir, req.WorkDir)
+	errs = append(errs, introErrs...)
+	errs = append(errs, outroErrs...)
 	if len(errs) > 0 {
 		return Plan{}, errs
 	}
@@ -129,8 +173,85 @@ func Prepare(req Request, installed voices.Installed) (Plan, error) {
 		Script:    s,
 		Languages: langs,
 		Voices:    paths,
+		DemoDir:   demoDir,
 		OutputDir: outputDir,
+		Intro:     intro,
+		Outro:     outro,
 	}, nil
+}
+
+// resolveCard turns the script's intro or outro (nil: not mentioned) into a
+// Card. def is the built-in card's text, each field of which an explicit text
+// replaces. A custom image is checked here, so a missing file fails before any
+// browser or TTS work (FR-002).
+func resolveCard(name string, b *script.Bookend, def Card, demoDir, workDir string) (Card, failure.ValidationErrors) {
+	def.Duration = script.DefaultCardMs * time.Millisecond
+	if b == nil {
+		return def, nil
+	}
+	if b.Off {
+		return Card{Off: true}, nil
+	}
+	c := Card{
+		Title:    cmp.Or(b.Title, def.Title),
+		Subtitle: cmp.Or(b.Subtitle, def.Subtitle),
+		Duration: def.Duration,
+	}
+	if b.DurationMs > 0 {
+		c.Duration = time.Duration(b.DurationMs) * time.Millisecond
+	}
+	if b.Image == "" {
+		return c, nil
+	}
+
+	verr := func(msg string) failure.ValidationErrors {
+		return failure.ValidationErrors{{Pointer: "/" + name + "/image", Message: msg}}
+	}
+	abs, ok := within(workDir, resolve(demoDir, b.Image))
+	if !ok {
+		return Card{}, verr(outsideWorkDir(name+".image", b.Image))
+	}
+	fi, err := os.Stat(abs)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return Card{}, verr("image not found: " + abs)
+	case err != nil:
+		return Card{}, verr("read image: " + err.Error())
+	case !fi.Mode().IsRegular():
+		return Card{}, verr("image is not a regular file: " + abs)
+	}
+	// The extension is only a hint (schema); a wrong file would otherwise fail
+	// in ffmpeg after TTS and the recording.
+	switch isImage, err := sniffImage(abs); {
+	case err != nil:
+		return Card{}, verr("read image: " + err.Error())
+	case !isImage:
+		return Card{}, verr("image is not a PNG or JPEG: " + abs)
+	}
+	// The picture is the whole card, so the text is not used.
+	return Card{Image: abs, Duration: c.Duration}, nil
+}
+
+// Leading bytes of the two picture formats a card image may have.
+var (
+	pngMagic  = []byte("\x89PNG\r\n\x1a\n")
+	jpegMagic = []byte{0xff, 0xd8, 0xff}
+)
+
+// sniffImage reports whether the file at path starts like a PNG or a JPEG.
+func sniffImage(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, len(pngMagic))
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	head = head[:n]
+	return bytes.HasPrefix(head, pngMagic) || bytes.HasPrefix(head, jpegMagic), nil
 }
 
 // resolve anchors a script path at the working directory, so no stage needs it.
@@ -174,38 +295,86 @@ func OutputName(name, lang string, ts time.Time) string {
 	return fmt.Sprintf("%s.%s.%s.mp4", name, lang, ts.UTC().Format(timestampLayout))
 }
 
+// reporter is how a render talks to its caller: step progress and log lines,
+// with the clock that times the phases.
+type reporter struct {
+	progress Progress
+	log      func(msg string)
+	now      func() time.Time
+}
+
+// logf sends one line to Request.Log, if the caller set one.
+func (r reporter) logf(format string, a ...any) {
+	if r.log != nil {
+		r.log(fmt.Sprintf(format, a...))
+	}
+}
+
+// since is the time elapsed since t, to a tenth of a second.
+func (r reporter) since(t time.Time) string { return round(r.now().Sub(t)) }
+
+func round(d time.Duration) string { return d.Round(100 * time.Millisecond).String() }
+
 // Render validates the request, renders every selected language in order and
 // publishes the MP4s only when all of them succeeded (BR-004, FR-010). Work
 // happens under <work>/.screencaster/tmp/<runId>, which is removed on every
 // path. A step, TTS or assembly problem comes back as *failure.Failure; a
-// cancelled ctx as ctx.Err().
-func Render(ctx context.Context, d Deps, req Request) ([]Output, error) {
+// cancelled ctx as ctx.Err(). Once the script is accepted, Request.Log gets a
+// start line, one line per phase and language, and an end line (decision 64).
+func Render(ctx context.Context, d Deps, req Request) (_ []Output, err error) {
 	start := d.Now() // FR-010: the job start time names every output
 	plan, err := Prepare(req, d.Voices)
 	if err != nil {
 		return nil, err
 	}
 
+	rep := reporter{progress: req.Progress, log: req.Log, now: d.Now}
+	rep.logf("render start: %s name=%s languages=%s voices=%s steps=%d output=%s",
+		req.ScriptPath, plan.Script.Name, strings.Join(plan.Languages, ","), voiceNames(plan), len(plan.Script.Steps), plan.OutputDir)
+	defer func() {
+		if err != nil {
+			rep.logf("render failed after %s", rep.since(start))
+		}
+	}()
+
 	runDir := filepath.Join(req.WorkDir, ".screencaster", "tmp", d.RunID())
 	defer func() { _ = os.RemoveAll(runDir) }()
 
 	outs := make([]Output, 0, len(plan.Languages))
 	for _, lang := range plan.Languages {
-		out, err := renderLanguage(ctx, d, plan, lang, filepath.Join(runDir, lang), req.Progress)
+		out, err := renderLanguage(ctx, d, plan, lang, filepath.Join(runDir, lang), rep)
 		if err != nil {
 			return nil, err
 		}
 		outs = append(outs, out)
 	}
-	return publish(plan.OutputDir, plan.Script.Name, start, outs)
+	outs, err = publish(plan.OutputDir, plan.Script.Name, start, outs)
+	if err != nil {
+		return nil, err
+	}
+	rep.logf("render done in %s", rep.since(start))
+	for _, o := range outs {
+		rep.logf("[%s] %s (%s)", o.Lang, o.Path, round(time.Duration(o.DurationMs)*time.Millisecond))
+	}
+	return outs, nil
 }
 
-// renderLanguage runs TTS, then the recording, then assembly for one language
-// (ARCHITECTURE §4, rule 3: clip durations decide step timing). The returned
-// Path is the temp MP4.
-func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, progress Progress) (Output, error) {
-	clipDir, videoDir := filepath.Join(dir, "clips"), filepath.Join(dir, "video")
-	for _, p := range []string{clipDir, videoDir} {
+// voiceNames lists the voice per language as lang=name, in language order.
+func voiceNames(plan Plan) string {
+	names := make([]string, len(plan.Languages))
+	for i, lang := range plan.Languages {
+		names[i] = lang + "=" + strings.TrimSuffix(filepath.Base(plan.Voices[lang]), ".onnx")
+	}
+	return strings.Join(names, ",")
+}
+
+// renderLanguage runs TTS, builds the cards, records and assembles one
+// language (ARCHITECTURE §4, rule 3: clip durations decide step timing). The
+// cards come before the slow recording so a card problem fails early. The
+// returned Path is the temp MP4.
+func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, rep reporter) (Output, error) {
+	clipDir, videoDir, cardDir := filepath.Join(dir, "clips"), filepath.Join(dir, "video"), filepath.Join(dir, "cards")
+	for _, p := range []string{clipDir, videoDir, cardDir} {
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return Output{}, fmt.Errorf("create temp dir: %w", err)
 		}
@@ -214,6 +383,7 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, pr
 	steps := plan.Script.Steps
 	durations := map[int]time.Duration{}
 	clipPaths := map[int]string{}
+	t := d.Now()
 	for i, step := range steps {
 		text := step.Narration[lang]
 		if text == "" {
@@ -229,6 +399,12 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, pr
 		}
 		durations[i], clipPaths[i] = dur, path
 	}
+	rep.logf("[%s] narration: %d clips in %s", lang, len(clipPaths), rep.since(t))
+
+	intro, outro, err := buildCards(ctx, d, plan, lang, cardDir, rep)
+	if err != nil {
+		return Output{}, err
+	}
 
 	in := recorder.Input{
 		Steps:        steps,
@@ -238,15 +414,19 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, pr
 		BaseURL:      plan.Script.BaseURL,
 		StorageState: plan.Script.StorageState,
 	}
-	if progress != nil {
-		in.OnStep = func(i int) { progress(lang, i+1, len(steps), steps[i].Action, executor.Target(steps[i])) }
+	if rep.progress != nil {
+		in.OnStep = func(i int) { rep.progress(lang, i+1, len(steps), steps[i].Action, executor.Target(steps[i])) }
 	}
+	rep.logf("[%s] recording", lang)
+	t = d.Now()
 	rec, err := d.Rec.Record(ctx, in)
 	if err != nil {
 		return Output{}, err
 	}
+	rep.logf("[%s] recorded in %s", lang, rep.since(t))
 
-	asm := assembler.Input{Webm: rec.WebmPath, Out: filepath.Join(dir, "out.mp4")}
+	// Offsets stay relative to the recording; the assembler adds the intro.
+	asm := assembler.Input{Webm: rec.WebmPath, Intro: intro, Outro: outro, Out: filepath.Join(dir, "out.mp4")}
 	for i := range steps { // step order keeps the ffmpeg inputs stable
 		if p, ok := clipPaths[i]; ok {
 			asm.Clips = append(asm.Clips, assembler.Clip{Path: p, Offset: rec.Offsets[i]})
@@ -255,6 +435,7 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, pr
 	if m := plan.Script.Meta; m != nil {
 		asm.Title, asm.Comment = m.Title, m.Description
 	}
+	t = d.Now()
 	ms, err := d.Asm.Assemble(ctx, asm)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -262,7 +443,53 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, pr
 		}
 		return Output{}, failure.Assembly(lang, err.Error())
 	}
+	rep.logf("[%s] assembled %s video in %s", lang, round(time.Duration(ms)*time.Millisecond), rep.since(t))
 	return Output{Lang: lang, Path: asm.Out, DurationMs: ms}, nil
+}
+
+// buildCards returns the intro and outro stills for lang (nil for a card that
+// is off). A card with a custom image needs no work; the built-in cards of
+// this language are drawn in one browser launch into dir. The outro's closing
+// line follows the language (decision 63).
+func buildCards(ctx context.Context, d Deps, plan Plan, lang, dir string, rep reporter) (intro, outro *assembler.Still, err error) {
+	outroCard := plan.Outro
+	outroCard.Title = cmp.Or(outroCard.Title, card.Outro(lang))
+
+	var shots []Shot
+	still := func(name string, c Card) (*assembler.Still, error) {
+		if c.Off {
+			return nil, nil
+		}
+		if c.Image != "" {
+			return &assembler.Still{Path: c.Image, Duration: c.Duration}, nil
+		}
+		html, err := card.HTML(card.Text{Title: c.Title, Subtitle: c.Subtitle})
+		if err != nil {
+			return nil, failure.Cards(lang, err)
+		}
+		out := filepath.Join(dir, name+".png")
+		shots = append(shots, Shot{HTML: html, Out: out})
+		return &assembler.Still{Path: out, Duration: c.Duration}, nil
+	}
+	if intro, err = still("intro", plan.Intro); err != nil {
+		return nil, nil, err
+	}
+	if outro, err = still("outro", outroCard); err != nil {
+		return nil, nil, err
+	}
+	if len(shots) == 0 {
+		return intro, outro, nil
+	}
+
+	t := d.Now()
+	if err := d.Cards.Screenshot(ctx, shots); err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return nil, nil, failure.Cards(lang, err)
+	}
+	rep.logf("[%s] cards: %d built in %s", lang, len(shots), rep.since(t))
+	return intro, outro, nil
 }
 
 // publish moves the temp MP4s into outputDir under their final names, all

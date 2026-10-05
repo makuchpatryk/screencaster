@@ -20,7 +20,7 @@
       "$ref": "#/$defs/storageState"
     },
     "outputDir": {
-      "description": "Where MP4s are written, relative to the working directory and inside it. Default output.",
+      "description": "Where MP4s are written, relative to the demo file's folder and inside the working directory. Default output.",
       "type": "string",
       "minLength": 1
     },
@@ -45,6 +45,14 @@
         "audience": { "enum": ["release-notes", "sales", "marketing"] }
       }
     },
+    "intro": {
+      "description": "Card shown for 3 s before the recording. Omit for the built-in card (title and description), false for none.",
+      "$ref": "#/$defs/bookend"
+    },
+    "outro": {
+      "description": "Card shown for 3 s after the recording. Omit for the built-in card (closing line and title), false for none.",
+      "$ref": "#/$defs/bookend"
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -53,6 +61,28 @@
     }
   },
   "$defs": {
+    "bookend": {
+      "description": "Start or end card: false for none, or an object. Without image the built-in card is drawn from title and subtitle.",
+      "if": { "type": "object" },
+      "then": {
+        "additionalProperties": false,
+        "properties": {
+          "image": {
+            "description": "Path of a PNG or JPEG, relative to the demo file's folder. Shown full-frame instead of the built-in card, so it excludes title and subtitle.",
+            "type": "string",
+            "pattern": "(?i)\\.(png|jpe?g)$"
+          },
+          "title": { "type": "string", "maxLength": 120 },
+          "subtitle": { "type": "string", "maxLength": 500 },
+          "durationMs": { "description": "How long the card is shown. Default 3000.", "type": "integer", "minimum": 500, "maximum": 10000 }
+        },
+        "allOf": [
+          { "not": { "required": ["image", "title"] } },
+          { "not": { "required": ["image", "subtitle"] } }
+        ]
+      },
+      "else": { "const": false }
+    },
     "storageState": {
       "type": "object",
       "additionalProperties": false,

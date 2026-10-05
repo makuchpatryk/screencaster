@@ -55,10 +55,11 @@ core/                      library, no MCP, no SQLite
   script/                  types, embedded JSON Schema, cross-field    FR-001, FR-002
   voices/                  discover installed voices, resolve per lang BR-011, FR-018
   tts/                     Piper wrapper, WAV duration                 FR-003
-  browser/                 playwright-go wrapper: launch, context      FR-004
+  browser/                 playwright-go wrapper: launch, context, card screenshots   FR-004
+  card/                    built-in start/end card page and closing line   FR-009
   executor/                step execution (two modes)                  FR-005, FR-006
   recorder/                run one language: clips + steps -> webm + offsets   FR-004, FR-007
-  assembler/               ffmpeg mix + transcode + mux + tags         FR-009
+  assembler/               ffmpeg mix + cards + transcode + mux + tags FR-009
   renderer/                orchestrator: validate -> per-lang -> publish   FR-008, FR-010
   explorer/                explore_page logic                          FR-017
   lock/                    flock-based render lock                     see 6.3
@@ -82,11 +83,11 @@ The JSON Schema lives next to the code that embeds it: `core/script/script.schem
 
 - `cli` → `core`. `mcp` → `core`. Never the reverse, and `cli` never imports `mcp`.
 - `core` must not import SQLite or the MCP SDK.
-- `core/renderer` talks to the recorder (browser), TTS and ffmpeg through small interfaces (`Recorder`, `Synthesizer`, `Assembler`). Unit tests use fakes. Only the e2e test uses the real tools.
+- `core/renderer` talks to the recorder (browser), TTS and ffmpeg through small interfaces (`Recorder`, `Synthesizer`, `Assembler`; `Cards` for the card screenshots). Unit tests use fakes. Only the e2e test uses the real tools.
 
 ## 4. Render pipeline
 
-`renderer.Render(ctx, Deps, Request) ([]Output, error)` is the single code path for CLI and MCP (BR-001, FR-011). `Deps` holds the tools, the installed voices, the clock and the run-ID source; `Request.Progress` is told about each step before it runs (CLI progress on stderr). The only difference is the caller: CLI calls it directly, the MCP worker calls it after dequeueing.
+`renderer.Render(ctx, Deps, Request) ([]Output, error)` is the single code path for CLI and MCP (BR-001, FR-011). `Deps` holds the tools (including `Cards`, the card screenshots), the installed voices, the clock and the run-ID source; `Request.Progress` is told about each step before it runs (CLI progress on stderr). `Request.Log` gets one line per render event: a start summary once the script is accepted, one line per phase and language with its elapsed time (narration, cards, recording, assembly) and an end line (`render done in …` plus the paths, or `render failed after …`). The wording lives in `renderer`; the CLI prints the lines on stderr, the MCP worker writes them to `slog` with the job id (decision 64). The only difference is the caller: CLI calls it directly, the MCP worker calls it after dequeueing.
 
 ```mermaid
 sequenceDiagram
@@ -104,9 +105,10 @@ sequenceDiagram
     loop each language, in order
         R->>T: synthesize clip per narrated step
         T-->>R: wav + durationMs
+        R->>B: screenshot built-in cards (one launch)
         R->>B: record(steps, clips)
         B-->>R: webm + stepOffsets
-        R->>A: assemble(webm, clips@offsets, meta)
+        R->>A: assemble(webm, clips@offsets, intro, outro, meta)
         A-->>R: tmp/<lang>.mp4
     end
     R->>FS: move all tmp mp4s -> <name>.<lang>.<ts>.mp4
@@ -115,9 +117,9 @@ sequenceDiagram
 
 Rules:
 
-1. **Validate first.** Schema, baseUrl, narration-per-language, voice installed, `outputDir` inside the working directory (the MCP `script` path too, `renderer.ScriptPath`; the CLI may name any script). All before any browser or TTS work (FR-001, FR-002, BR-011).
+1. **Validate first.** Schema, baseUrl, narration-per-language, voice installed, `outputDir` and the intro/outro `image` inside the working directory, resolved against the demo's folder, and the image existing as a regular file that starts like a PNG or JPEG (the MCP `script` path too, `renderer.ScriptPath`; the CLI may name any script). All before any browser or TTS work (FR-001, FR-002, BR-011).
 2. **Languages run sequentially**, each from a fresh browser context (FR-004).
-3. **TTS before browser** for each language, because clip durations decide step timing (FR-003).
+3. **TTS before browser** for each language, because clip durations decide step timing (FR-003). The cards come right after TTS and before the recording, so a card problem fails before the slow part.
 4. **Abort path.** First step error cancels the context, closes the browser, deletes the job temp dir and returns a `Failure`. Nothing reaches `outputDir`. If `en` succeeded and `pl` fails, the `en` MP4 is discarded too (BR-004).
 5. **Publish last.** After all languages succeed, files are moved into `outputDir` with a single shared timestamp (FR-010, BR-006). Every target is checked for existence first. Move is `os.Rename`. If temp and output are on different filesystems, copy to `<name>.part` in `outputDir` (`O_EXCL`), then rename. Existing files are never opened for writing. If a move fails, the files already moved by this job are removed again.
 
@@ -137,6 +139,7 @@ t0 ─────────────────────────�
 - For each step: record `offset`, start the action, then wait until `max(actionEnd, offset + clipDuration)` if narrated, else continue at `actionEnd` (BR-003, FR-007).
 - Narration is **not** played during recording. Assembler places each clip at `adelay=<offset>ms` and mixes (FR-009.1). So audio sync does not depend on real-time playback.
 - Playwright's WebM is variable frame rate. The transcode forces constant 30 fps (`-r 30` / `fps=30` filter) so video time equals wall time and offsets stay valid.
+- The video is `intro card + recording + outro card` (3 s each by default, decision 63). The recorder knows nothing of the cards: its offsets are relative to the recording, and the assembler places each clip at `introDuration + offset`. The cards are stills (`-loop 1 -framerate 30 -t <s>`), fitted to 1920×1080, joined to the recording with `concat`; every input is finite. The audio ends with the last clip, so it may end before the outro does.
 - Output duration is the video length (FR-009.4). The last narrated step waits for its clip, so the video always covers the audio. The assembler therefore mixes the clips without padding; an endless `apad` with `-shortest` never terminates in ffmpeg 5.1 (found in M3). With no narrated step, `anullsrc` is mapped directly and cut by `-shortest`.
 - Target drift: ±100 ms (FR-007 AC). The e2e test measures actual drift by checking an audible/visible marker step against its offset, and accepts **±150 ms** (`maxDrift` in `tests/e2e/render_test.go`): a runtime-image run measured 125 ms because the WebM start is not fixed (see the lead-in note below and §17.1). This is a deviation from FR-007, kept until the lead-in is measured per recording.
 
@@ -230,6 +233,7 @@ type Failure struct {
 | Step | executor | BR-004 fields | print, exit 1 | `jobs.error_json` |
 | TTS | tts | `tts failed at step <n> (<lang>): <stderr>` | print, exit 1 | `error_json.message` |
 | Assembly | assembler | `assembly failed (<lang>): <last 20 stderr lines>` | print, exit 1 | `error_json.message` |
+| Cards | renderer (card page, browser screenshot) | `build cards (<lang>): <message>` | print, exit 1 | `error_json.message` |
 | Interrupted | startup recovery | `{message: "interrupted"}` | n/a | `error_json` |
 
 ## 10. Job queue and persistence (MCP only)
@@ -259,12 +263,13 @@ stateDiagram-v2
 ```
 /work                          mounted project (rw)
 ├── demos/*.yaml               scripts, each with its own baseUrl, storageState, outputDir (FR-001)
+├── demos/assets/*             card pictures a demo names with `intro.image` / `outro.image` (any folder inside /work works)
+├── demos/output/              <name>.<lang>.<ts>.mp4  (never overwritten); outputDir resolves against the demo's folder
 ├── voices/*.onnx(+.json)      extra Piper voices (FR-016)
-├── output/                    <name>.<lang>.<ts>.mp4  (never overwritten)
 └── .screencaster/
     ├── jobs.db                MCP only
     ├── render.lock
-    └── tmp/<runId>/<lang>/    clips/*.wav, video/*.webm, out.mp4
+    └── tmp/<runId>/<lang>/    clips/*.wav, video/*.webm, cards/*.png, out.mp4
 ```
 
 - `runId` is the job UUID for MCP and a random ID for CLI. The temp dir is removed on success and on abort.
@@ -277,7 +282,7 @@ stateDiagram-v2
 - Contents: `screencaster`, `screencaster-mcp`, Playwright Node driver + Chromium, Piper binary (`/opt/piper/piper`, release 2023.11.14-2, libs and espeak-ng data next to it), voices `en_US-ryan-high` and `pl_PL-darkman-medium` under `/opt/piper/voices`, `ffmpeg`/`ffprobe` (FR-016). Piper and the voices are sha256-pinned.
 - Voice discovery scans `/opt/piper/voices` and `/work/voices`. The language code is the voice name up to the first `_` (FR-018).
 - Network: `--add-host=host.docker.internal:host-gateway` makes a demo's `baseUrl` reach the host app on Linux (Decision 27).
-- **Stdio hygiene.** MCP uses stdout for protocol frames. All logging goes to stderr. Subprocess stdout/stderr (Piper, ffmpeg, Playwright driver) is captured and never inherited. A stray byte on stdout corrupts the session.
+- **Stdio hygiene.** MCP uses stdout for protocol frames. All logging goes to stderr: the render log lines reach it through `Request.Log` and `slog` (decision 64). Subprocess stdout/stderr (Piper, ffmpeg, Playwright driver) is captured and never inherited. A stray byte on stdout corrupts the session.
 - Image build is multi-stage: `piper` (Piper + voices, shared with `dev`), `dev` (toolchain for `make`), `build` (static `screencaster` and `screencaster-mcp`, plus the playwright CLI at the version `core/go.mod` pins), `runtime` (last, so `docker build .` yields it). `runtime` is `debian:bookworm-slim` + Chromium (via `playwright install --with-deps`) + ffmpeg + Piper + both binaries in `/usr/local/bin`.
 - The runtime image runs as root with `WORKDIR /work`, so output files in the mounted project are owned by root. Use `docker run --init` so SIGTERM reaches the process (§6.4).
 - `make image-check` lists `/opt/piper/voices` in the image and requires the `.onnx` and `.onnx.json` of every built-in voice in `core/voices`.
@@ -286,7 +291,7 @@ stateDiagram-v2
 
 | Level | Scope | Tools |
 |-------|-------|-------|
-| Unit | schema, baseUrl and storageState checks, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler` |
+| Unit | schema, baseUrl and storageState checks, cross-field rules, voice resolution, offset math, `max(...)` wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler`, `Cards` |
 | Integration | SQLite store, lock file semantics, MCP tool/prompt wiring via in-memory transport | `go test` |
 | E2E (1) | Fixture app → real render EN, and EN+PL → ffprobe (h264, 1920×1080, 30 fps, aac), drift check, NFR-001 ratio, selector from `explore_page` used in a render | `make e2e` in the dev image, locally (Decision 54); `make e2e-runtime` runs the CLI tests against the runtime image (Decision 56) |
 
@@ -302,13 +307,13 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 15. Extension points (post-MVP)
 
-- **Slides / overlays** (PRD §10.2): not designed for in MVP. `recorder` produces one recording per language. When slides arrive, change the recorder output and assembler then. Overlays would hook in as an executor-level init script, like the cursor.
+- **Slides / overlays** (PRD §10.2): a start card and an end card exist (decision 63); slides interleaved between browser segments are not designed for in MVP. `recorder` produces one recording per language. When interleaved slides arrive, change the recorder output and assembler then, building on the still handling in `assembler`. Overlays would hook in as an executor-level init script, like the cursor.
 - **New languages:** no code change. Drop `.onnx` + `.onnx.json` into `/work/voices`.
 - **Other TTS engines:** behind `Synthesizer`. Explicitly out of scope now.
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55 and 58–60 are also in the PRD log; 56 and 57 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–64 are also in the PRD log; 56 and 57 are only here.
 
 | # | Decision | Alternatives | Rationale |
 |---|----------|--------------|-----------|
@@ -330,6 +335,9 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 and 58–60 are al
 | 59 | `explore_page` takes an absolute `url` plus an optional inline `storageState`; the url is also the explorer's `BaseURL` | Path plus a `baseUrl` input | Nothing to read from disk. Relative gotos in `actions` resolve against the explored page, so `core/explorer` and `core/executor` stay unchanged. |
 | 60 | No project-level voice defaults: script, then built-in | Keep config voices; env-var defaults | Follows from 58. `voices.Resolve` and `Options` lose the config parameter. |
 | 61 | `storageState` is an inline object (`script.StorageState`, Playwright's shape) in the script and in `explore_page`, not a file path | Path to a Playwright JSON file | User choice. One self-contained file; no file-existence or inside-workdir check, and `renderer.StorageStatePath` is gone. `core/browser` hands it to Playwright by a JSON round trip, so the Go type carries Playwright's tags. |
+| 62 | Every path in a demo resolves against the demo file's folder (`renderer.Prepare`): `outputDir` defaults to `<demo dir>/output`, a card `image` is relative to the demo. Each must stay inside the working directory. Supersedes the "relative to the demo file" rejection in 58 | Paths relative to the working directory | User choice. A demo, its videos and its pictures move together; the inside-work-dir rule stays because the script is LLM-written. A script outside the work dir has its default output outside too and is rejected until `outputDir` is an absolute path inside it. |
+| 63 | Every video has a 3 s start card and a 3 s end card unless `false`. The built-in card is `core/card`'s embedded HTML page screenshotted by Chromium (`browser.Launcher.Screenshot`, one launch per language), a custom `image` is used as is; `assembler` loops each still, fits it to 1920×1080 and joins it with `concat`, and shifts the clip offsets by the intro | Opt-in cards; ffmpeg `drawtext`; Go image rendering; cards recorded as browser pages | User choice. Chromium wraps text and has the Polish glyphs (spike S5). Recorded pages would pass through the 30 fps VFR WebM and meet the bimodal start (§17.1). |
+| 64 | Render log lines come from `renderer` through `Request.Log` (a `func(string)`); the CLI writes them to stderr, the MCP worker to `slog` with the job id | A `*slog.Logger` in `Deps` | One place for the wording; plain lines in the CLI instead of `time=… level=…`. Nothing on stdout. |
 
 ## 17. Open items for spikes
 
@@ -347,6 +355,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55 and 58–60 are al
    - contentinfo: Footer
    ```
    Nameless nodes (`- text: Name`) carry no quotes. A regexp over the leading `- role "name"` is enough to map lines to `role=<role>[name="<name>"]`, so the `Evaluate` DOM-walk fallback is not needed. The `role=` selector compares the whole name (`"Save"` does not match `"Save all"`), so the `Count` check and `>> nth=` suffix are needed only for repeated names. Guarded by `TestExplore_selectorsWorkInARender`, `TestExplore_selectorsPickTheirOwnElement` (e2e) and the mapper unit tests.
+5. **Cards:** confirm the built-in card renders the Polish letters in the images and that `concat` of looped stills with the recording ends and keeps audio in sync. **Done: passes.** Rendered in the dev image, `Dziękujemy za uwagę` and `żółć` show the right glyphs (checked by eye, and `TestScreenshot_polishGlyphsAreDistinct` fails if a letter falls back to the same box). Stills with `-loop 1 -framerate 30 -t <s>` into `concat` (n=3) end at the sum of the parts: a 5 s recording with a 3 s intro and a 3 s outro gave 11.0 s, h264 1920×1080 30 fps, with the aac stream ending with the last clip. The e2e drift check keeps passing with the intro on, the flash search starting after the intro. The same Polish check runs against the runtime image in `make e2e-runtime`.
 
 ## 18. PRD inconsistencies
 

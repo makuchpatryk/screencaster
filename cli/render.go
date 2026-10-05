@@ -62,6 +62,7 @@ func renderCmd(workDir string, render renderFunc, stdout, stderr io.Writer) *cob
 					}
 					_, _ = fmt.Fprintf(stderr, "[%s] step %d/%d %s%s\n", lang, i, n, action, target)
 				},
+				Log: func(msg string) { _, _ = fmt.Fprintln(stderr, msg) },
 			})
 			if err != nil {
 				return err

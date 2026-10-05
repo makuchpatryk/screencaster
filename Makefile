@@ -51,7 +51,7 @@ lint:
 e2e:
 	$(E2E_RUN) sh -c 'cd tests/e2e && go test -tags e2e -race -count=1 -v ./...'
 
-# The CLI e2e tests against the runtime image (PRD M4 DoD): the test binary is
+# The CLI and card e2e tests against the runtime image (PRD M4 DoD): the test binary is
 # compiled in the dev image, then runs in the runtime image next to the image's
 # own screencaster binary, Chromium, Piper and ffmpeg. The fixture is served by
 # the test process itself, so no network is needed.
@@ -59,4 +59,4 @@ e2e-runtime: image
 	$(DEV_RUN) sh -c 'cd tests/e2e && go test -c -tags e2e -o /src/.screencaster/e2e.test .'
 	docker run --rm --init --shm-size=1g -e SCREENCASTER_BIN=/usr/local/bin/screencaster \
 		-v $(CURDIR):/src -w /src/tests/e2e $(IMAGE) \
-		/src/.screencaster/e2e.test -test.run 'TestRender_cli' -test.count=1 -test.v
+		/src/.screencaster/e2e.test -test.run 'TestRender_cli|TestScreenshot_' -test.count=1 -test.v

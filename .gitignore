@@ -13,8 +13,8 @@
 coverage.txt
 coverage.html
 
-# Render output and scratch (screencaster.yaml outputDir default, FR-001)
-/output/
+# Render output (outputDir default: output/ next to each demo, decision 62) and scratch
+output/
 .screencaster/
 
 # Vendor (uncomment if not vendoring)

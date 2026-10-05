@@ -172,7 +172,7 @@ func TestRecord_leadInIsWithinTolerance(t *testing.T) {
 
 	// The recorder places audio at t0-offset minus LeadInCompensation; the flash
 	// frame must land there.
-	flashAt := flashOnset(t, video)
+	flashAt := flashOnset(t, video, 0)
 	drift := flashAt - (clickAt - recorder.LeadInCompensation)
 	t.Logf("S1: click at t0+%v, flash frame at %v, difference %v", clickAt.Round(time.Millisecond), flashAt.Round(time.Millisecond), drift.Round(time.Millisecond))
 	if drift < -100*time.Millisecond || drift > 100*time.Millisecond {

@@ -18,21 +18,25 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
    - `compose.yaml` sets `--init` (forwards SIGTERM, so a stopped render cleans up), `--shm-size=1g`, the `host.docker.internal` host mapping and the `.:/work` mount.
    - The host mapping lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
    - Plain Docker works too: `docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml`.
-   - The container runs as root: files in `output/` belong to root.
+   - The container runs as root: the rendered files belong to root.
    - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
 
-3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. `outputDir` is relative to the working directory (`/work` in Docker):
+3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. Every path in a demo (`outputDir`, an intro or outro `image`) is relative to the demo file's folder and must stay inside the working directory (`/work` in Docker):
    ```yaml
    name: my-demo
    baseUrl: http://host.docker.internal:3000   # required, absolute http(s) URL
    storageState:                               # optional; omit for a public site
      cookies:
        - {name: session, value: <value>, domain: host.docker.internal, path: /}
-   outputDir: output                           # optional, default output
+   outputDir: output                           # optional, default output (next to the demo)
    languages: [en, pl]
    meta:
      title: How to create a project
+     description: Create a project from the projects page.
      audience: release-notes
+   intro:                                      # optional, default: a built-in card
+     image: assets/logo.png                    # your own picture instead (PNG or JPEG)
+   outro: false                                # no end card
    steps:
      - action: goto
        url: /projects
@@ -47,8 +51,10 @@ Turn a natural-language description into a narrated demo video (MP4) with re-ren
    ```
    `storageState` has the shape of Playwright's `context.storageState()` (`cookies`, `origins` with `localStorage`); paste an exported file here as it is (JSON is valid YAML). It holds live session secrets, so keep a demo that has one out of git. A demo for a public site is just `name`, `baseUrl` and `steps`: no other file is needed. A `screencaster.yaml` from an earlier version is ignored (with a warning); move its fields into the demo.
 
+   **Start and end cards.** Every video starts with a 3 s card (the `meta` title and description) and ends with a 3 s card (a closing line in the video's language and the title), so it looks finished without an editing step. `intro` and `outro` change a card: `image` shows your picture full-frame (scaled to fit on a dark background; give it instead of `title` and `subtitle`), `title` and `subtitle` change the text, `durationMs` the time (500 to 10000), and `false` drops the card. The video is 6 s longer than the recording; use `intro: false` and `outro: false` for the plain recording. A demo for `demos/my-demo.yaml` with a logo keeps it in `demos/assets/logo.png`.
+
 4. **Render**:
-   - CLI: `screencaster render demos/my-demo.yaml`
+   - CLI: `screencaster render demos/my-demo.yaml`; it prints what it does on stderr (a start summary, one line per phase and language with its time, an end summary) and the video paths on stdout
    - MCP (in Claude Code): describe what you want, Claude writes the YAML and renders
 
 ## Docs
@@ -92,7 +98,7 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 ## Scripts
 
 - `demos/*.yaml` — stored demo scripts (created via chat or CLI)
-- `output/*.mp4` — rendered videos, never overwritten (BR-006, FR-010)
+- `demos/output/*.mp4` — rendered videos, in `output/` next to the demo that made them, never overwritten (BR-006, FR-010)
 
 ## Key constraints
 
