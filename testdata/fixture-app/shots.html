@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shots</title>
+  <style>
+    /* Fixed sizes and positions: the screenshots e2e test checks pixels. */
+    body { margin: 0; background: #fff; font-family: sans-serif; }
+    h1 { margin: 0; padding: 30px 40px; }
+    #panel { position: absolute; left: 100px; top: 200px; width: 300px; height: 120px; background: #3b82f6; }
+    #target { position: absolute; left: 800px; top: 400px; width: 240px; height: 70px; font-size: 24px; }
+    .dup { position: absolute; top: 600px; width: 100px; height: 40px; }
+    .dup + .dup { left: 200px; }
+  </style>
+</head>
+<body>
+  <h1>Shots</h1>
+  <div id="panel"></div>
+  <button type="button" id="target">Create</button>
+  <button type="button" class="dup">A</button>
+  <button type="button" class="dup">B</button>
+  <div style="height: 2400px"></div>
+</body>
+</html>

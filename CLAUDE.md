@@ -6,7 +6,9 @@
 - **Body:** Wrap at 72 chars (standard Git)
 - **No co-author line** — skip `Co-Authored-By: ...`
 
-Example: `Add scroll action to executor`
+Examples:
+- `Add scroll action to executor`
+- `Check script type before validation for tool errors`
 
 ## Skills
 

@@ -1,0 +1,14 @@
+name: shots-annotate
+type: screenshots
+baseUrl: http://host.docker.internal:3000
+outputDir: docs
+steps:
+  - goto: /projects
+  - screenshot:
+      annotate: { selector: "#create", box: true }
+  - screenshot:
+      selector: "#list"
+      annotate: { selector: "#create", box: true, arrow: true, dim: true, label: Click Create }
+  - screenshot:
+      fullPage: true
+      annotate: { selector: "#create", label: Here }

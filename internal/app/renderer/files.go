@@ -12,6 +12,8 @@ type Files interface {
 	Stat(name string) (fs.FileInfo, error)
 	Lstat(name string) (fs.FileInfo, error)
 	Open(name string) (io.ReadCloser, error)
+	// ReadDir lists a directory's entries; publishShots finds stale shots with it.
+	ReadDir(name string) ([]fs.DirEntry, error)
 	// CreateExcl creates name for writing and fails if it exists, so no
 	// existing file is ever opened for writing (BR-006).
 	CreateExcl(name string) (io.WriteCloser, error)

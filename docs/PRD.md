@@ -60,7 +60,7 @@ N/A — confirmed by user. The MVP is an internal tool. A future commercial vers
 ### BR-006: Outputs are never overwritten
 - **Rule:** Every render must write new files named `<demo>.<lang>.<timestamp>.mp4`. Existing files must not be overwritten or deleted by the tool.
 - **Applies to:** Output folder.
-- **Exceptions:** None.
+- **Exceptions:** Screenshots (FR-020): the PNGs of a screenshots script go to `<outputDir>/<name>/screenshots/NN.png` and replace the previous run's files, so the paths stay stable (decision 73). Only `NN.png` files in that folder are overwritten or deleted.
 
 ### BR-007: Unlimited retention
 - **Rule:** The tool must keep all MP4s and all job records forever. Cleanup is manual and outside the tool.
@@ -149,17 +149,18 @@ None identified by user.
 - SQLite-backed FIFO job queue.
 - Docker image containing everything.
 - A start card and an end card on every video (built in, replaceable by the developer's own picture, or off).
+- Screenshots: a script with `type: screenshots` writes PNGs of the app (viewport, full page, one element or a clip, optionally annotated) instead of a video, and the MCP tool `take_screenshots` queues it (FR-020).
 - Render log lines on stderr: start summary, one line per phase, end summary.
 
 ### 10.2 Post-MVP
 - Slides interleaved between browser segments (the start and end cards are MVP, decision 63).
-- Overlays (captions, callouts, element highlights).
+- Overlays (captions, callouts, element highlights) in videos. Annotations on screenshots are in the MVP (FR-020, decision 74).
 - Commercial / multi-tenant version.
 
 ### 10.3 Out of Scope
 - A schema/validation-only MCP tool or CLI command.
 - Login steps in scripts, sensitive-data masking.
-- Formats other than 16:9 1920×1080 MP4 (no vertical, no square).
+- Formats other than 16:9 1920×1080 MP4 (no vertical, no square), apart from the PNG screenshots of FR-020 (decision 72); no other image format, size or scale.
 - Multi-audio-track MP4s; languages without a Piper voice; automatic translation by the tool itself (Claude writes the narration text).
 - Cloud TTS providers, voice cloning, human voiceover.
 - CI-triggered or automatic re-renders.
@@ -226,6 +227,7 @@ None identified by user.
 - **Description:** The system must parse the YAML script and validate it against a JSON Schema file (`internal/domain/script/script.schema.json`, embedded with `go:embed` in that package and so compiled into both binaries) using `santhosh-tekuri/jsonschema`, before any browser or TTS work.
 - **Inputs / validation:**
   - `name` (string, required, `^[a-z0-9-]{1,64}$`; used in output filenames)
+  - `type` (`video` | `screenshots`, optional, default `video`; a screenshots script writes PNGs, FR-020)
   - `baseUrl` (string, required), `storageState` (object, optional), `outputDir` (string, optional): see FR-001
   - `languages` (array, optional, lowercase ISO 639-1 codes such as `en`, `pl`, `de`; default `["en"]`; overridable per render, BR-002)
   - `voices` (object, optional, keys are language codes, values Piper voice names; installed check per BR-011)
@@ -238,6 +240,7 @@ None identified by user.
     - `press: <key>`, or `press: { key, selector }` to press on an element
     - `scroll: <selector>` (into view), or `scroll: { y }` (window to `y` px, integer)
     - `wait: <ms>` (integer 1–30000), or `wait: <selector>` (until visible)
+    - `screenshot: true`, or `screenshot: { selector | fullPage | clip, annotate }` (screenshots scripts only, FR-020)
     - `narration` (optional object keyed by language code (`en`, `pl`, `de`, …), each a string ≤ 1000 chars, where an empty string keeps the step silent in that language; must contain an entry for every selected language; text for unselected languages is allowed and ignored; this cross-field rule is checked in code after schema validation)
     - Example: `- fill: { selector: "#email", value: demo@example.com }`
   - Selectors are Playwright selector strings (CSS, `role=`, `text=`).
@@ -328,7 +331,7 @@ None identified by user.
 
 ### FR-011: CLI
 - **Implements:** BP-003
-- **Description:** The `screencaster` binary must provide `screencaster render <script-path> [--lang en,pl]` (`--lang` overrides the script's `languages`), which runs FR-001…FR-010 synchronously without touching the job queue. Exit code 0 on success, 1 on any failure. It prints on stderr a start summary (script, languages, voices, step count, output dir), the step progress, one line per phase and language with its elapsed time (narration, cards, recording, assembly) and an end summary (output paths, video durations, total time); a failed render prints `render failed after <time>` and then the error once. The paths of the videos go to stdout. The MCP server writes the same lines to its stderr log with the job id.
+- **Description:** The `screencaster` binary must provide `screencaster render <script-path> [--lang en,pl]` (`--lang` overrides the script's `languages`), which runs FR-001…FR-010 synchronously without touching the job queue. Exit code 0 on success, 1 on any failure. It prints on stderr a start summary (script, languages, voices, step count, output dir), the step progress, one line per phase and language with its elapsed time (narration, cards, recording, assembly) and an end summary (output paths, video durations, total time); a failed render prints `render failed after <time>` and then the error once. The paths of the videos go to stdout. The MCP server writes the same lines to its stderr log with the job id. For a screenshots script (FR-020) the step progress has no `[lang]` prefix and stdout lists the PNG paths.
 - **Acceptance criteria:**
   - Given a valid script, when `screencaster render` runs, then it prints the output path(s) and exits 0.
 
@@ -346,7 +349,7 @@ None identified by user.
 ### FR-013: MCP tool `get_render_status`
 - **Implements:** BP-001
 - **Description:** Input `{ "jobId": string }`. The tool must return `{ jobId, status, script, position?, outputs?, error?, createdAt, startedAt?, finishedAt? }`:
-  - `outputs` is `[{ lang, path, durationMs }]` when `succeeded`.
+  - `outputs` is `[{ lang, path, durationMs }]` when `succeeded`; for a screenshots job (FR-020) it is `[{ path }]`, with no `lang` or `durationMs`.
   - `error` follows FR-008 when `failed`.
   - `position` is present when `queued`.
 - **Acceptance criteria:**
@@ -422,6 +425,20 @@ None identified by user.
   - Given `prompts/get` for `create_demo` with `description: "invite a user"`, when called, then the returned messages include the description and instructions 1–7.
   - Given `prompts/list`, when called, then `create_demo` is listed.
 
+### FR-020: Screenshots
+- **Implements:** BR-001, BR-004, BR-008
+- **Description:** A script with `type: screenshots` (FR-002) must write PNG screenshots of the app instead of a narrated video. It runs the same steps through the same executor (FR-005) in a fresh, unrecorded browser (1920×1080, no cursor overlay), and each `screenshot` step captures a PNG. No TTS, recording or ffmpeg is involved. `screencaster render` runs it (FR-011); the MCP tool `take_screenshots` queues it on the same queue, worker and render lock as videos (FR-014) and `get_render_status` reports it (FR-013).
+  - **Step:** `screenshot: true` captures the viewport, or `screenshot: { selector | fullPage: true | clip: { x, y, width, height }, annotate }` captures one element, the full page or a clip (integers in px from the viewport's top-left corner). At most one of `selector`, `fullPage` and `clip`.
+  - **Annotate:** `annotate: { selector, box?, arrow?, label?, dim? }` draws markers around one element before the capture, in a DOM overlay in document coordinates that is removed again afterwards (decision 74): `box` (an outline), `arrow` (pointing at the element's top-left corner), `label` (a text pill, 1–120 chars) and `dim` (darkens everything but the element). At least one marker; one annotation per shot. Markers outside the element can be cropped out of a `selector` shot.
+  - **Rules** (checked before any browser starts): a `screenshot` step needs `type: screenshots`; a screenshots script needs at least one `screenshot` step and has no `narration`, `intro`, `outro`, `languages` or `voices`; `--lang` is refused; `explore_page` actions cannot contain `screenshot`. Each error carries a JSON pointer.
+  - **Output:** `<outputDir>/<name>/screenshots/NN.png`, numbered in step order from `01.png` (three digits when there are more than 99 shots). Animations are stopped and the caret hidden at capture, so a static page gives the same pixels on every run (BR-001). A rerun overwrites the same names and removes the numbered shots it no longer produces; any other file in the folder is left alone (BR-006 exception, decision 73). PNGs are written to the temp dir and published only after every step succeeded (BR-004).
+  - **`take_screenshots`:** input `{ "script": string }`, output `{ jobId, status, position }` like `render_video`. A video script is a tool error `script type is video; use render_video`, and `render_video` answers a screenshots script with `script type is screenshots; use take_screenshots`.
+- **Acceptance criteria:**
+  - Given a screenshots script with a viewport, a `fullPage`, a `selector` and a `clip` step, when rendered, then `01.png`…`04.png` exist and measure 1920×1080, 1920 × the page height, the element's box and the clip's size.
+  - Given a step with `annotate: { selector, box: true }`, when rendered, then that PNG shows the box and the next shot, which has no `annotate`, shows no marker.
+  - Given a rerun with fewer shots, when it succeeds, then the extra numbered PNGs are gone and a `notes.txt` in the folder is untouched.
+  - Given a `screenshot` step in a script without `type: screenshots`, when validating, then validation fails with a pointer to that step and no browser starts.
+
 # Part III — Technical
 
 ## 13. Data Model
@@ -442,8 +459,8 @@ None identified by user.
 | script | TEXT | no | the YAML as validated by `render_video` | the job renders these bytes, not the file at run time; `NULL` only in rows from before the column, which fail with `job has no script snapshot` |
 
 ### Files (no DB)
-- `demos/*.yaml` (scripts, each with its own target settings), `<outputDir>/*.mp4` (default `demos/output/` for `demos/x.yaml`).
-- **Relations:** One job → zero or more MP4 files (one per selected language).
+- `demos/*.yaml` (scripts, each with its own target settings), `<outputDir>/*.mp4` (default `demos/output/` for `demos/x.yaml`), and for a screenshots script `<outputDir>/<name>/screenshots/NN.png` (FR-020).
+- **Relations:** One job → zero or more MP4 files (one per selected language), or the PNGs of a screenshots script.
 - **Retention / deletion:** Forever; manual deletion only (BR-007).
 
 ## 14. Auth & Access Control
@@ -598,6 +615,10 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 62 | Every path in a demo resolves against the demo file's folder and must stay inside the working directory: `outputDir` (default `<demo dir>/output`) and a card `image`. Supersedes the "paths relative to the demo file" rejection in 58 | Paths relative to the working directory | User choice. A demo, its output and its pictures move together. The inside-the-work-dir rule stays because the script is LLM-written. A script outside the work dir has its default output outside too, so it needs an explicit absolute `outputDir` inside it. |
 | 63 | Every video gets a 3 s start card and a 3 s end card by default. The built-in card is an HTML page screenshotted by Chromium, joined to the recording by ffmpeg; `intro`/`outro` set a picture, text, time, or `false`. Moves the start and end cards from 10.2 into the MVP; interleaved slides stay post-MVP | Opt-in cards; ffmpeg `drawtext`; Go image rendering; cards recorded as browser pages | User choice. The output looks finished without an editing step. Chromium is already in the image, wraps long text and has the Polish glyphs. |
 | 64 | Render log lines are built in `app/renderer` and handed to `Request.Log`; the CLI prints them on stderr, the MCP worker writes them to `slog` with the job id | A `*slog.Logger` in the dependencies | One place for the wording, plain lines in the CLI (no `time=… level=…`), no stdout in the MCP server. |
+| 72 | `type: video\|screenshots` on the script; keyed `screenshot: true \| {selector\|fullPage\|clip, annotate}` steps only in screenshots scripts; screenshots scripts forbid narration, intro, outro, languages and voices | `--screenshots-only` flag; screenshots as a side output of a video | User choice. One script, one output kind; the keyed object keeps one action key per step (decision 70). |
+| 73 | Screenshots publish to `<outputDir>/<name>/screenshots/NN.png`, overwritten on rerun; stale `NN.png` removed, other files kept. Exception to BR-006 | Timestamped run folder | User choice. Stable paths for docs and READMEs that embed the images. |
+| 74 | Annotations (box, arrow, label, dim) are a DOM overlay in document coordinates, injected before the capture and removed after; opt-in per step. Moves overlays from 10.2 into the MVP for screenshots only | Go image post-processing | User choice. Chromium already renders the text and glyphs; no new dependency. |
+| 75 | `domain/shooter` runs a screenshots script and intercepts `screenshot` steps; the executor is unchanged; `app/renderer` reaches it through a `Shooter` port wired in `app/wire`. `take_screenshots` reuses the queue, worker, lock and `get_render_status`; no job-kind column | `Page.Screenshot` plus an executor case; the capture loop in `adapters/browser`; a separate queue | The executor stays file-agnostic and its fakes untouched; step semantics stay in one place; the renderer branches on the script type, so the worker needs no change. |
 
 ## 21. Open Questions
 None.
@@ -610,4 +631,5 @@ None.
 | Job | One queued/running/completed render of a script, producing one MP4 per selected language. (Not limited to EN and PL; any language with an installed voice is rendered.) |
 | Card | The start (`intro`) or end (`outro`) picture of a video, 3 s by default: built in, or the developer's own `image`. Has no narration. |
 | storageState | Playwright storage state (cookies/localStorage) used to start a logged-in session. Written inline in the demo script (optional). |
+| Screenshots script | A script with `type: screenshots`: the same steps, plus `screenshot` steps that each write a PNG to `<outputDir>/<name>/screenshots/`. No narration, languages, voices or cards (FR-020). |
 | Piper | Local open-source neural TTS engine. Voices and languages are pluggable via `/work/voices/*.onnx` files. |

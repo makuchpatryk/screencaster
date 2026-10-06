@@ -49,8 +49,9 @@ type Progress func(lang string, i, n int, action, target string)
 // never go back to the script file or the voice directories.
 type Plan struct {
 	Script    script.Script
-	Languages []string
-	Voices    map[string]string // language -> voice name
+	Type      string            // script.TypeVideo or script.TypeScreenshots
+	Languages []string          // nil for a screenshots script
+	Voices    map[string]string // language -> voice name; nil for a screenshots script
 	DemoDir   string            // absolute; every path in the demo resolves against it (decision 62)
 	OutputDir string            // absolute
 	Intro     Card
@@ -72,7 +73,9 @@ type Card struct {
 // Prepare validates script, narration, voices, output directory and card
 // images without starting any browser, TTS or ffmpeg work (FR-001, FR-002,
 // BR-011). Problems with the script, voices and paths come back together as
-// failure.ValidationErrors. files reads the script and the card images.
+// failure.ValidationErrors. files reads the script and the card images. A
+// screenshots script has no languages, voices or cards, so those checks are
+// skipped and a language override is rejected (decision 72).
 func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 	path := resolve(req.WorkDir, req.ScriptPath)
 	data := req.Script
@@ -88,10 +91,23 @@ func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 		return Plan{}, err
 	}
 
-	langs := script.Languages(req.LangOverride, s.Languages)
-	errs := script.Validate(s, langs)
-	chosen, voiceErrs := voices.Resolve(langs, s.Voices, catalog)
-	errs = append(errs, voiceErrs...)
+	shots := s.Kind() == script.TypeScreenshots
+	var (
+		langs  []string
+		chosen map[string]string
+		errs   failure.ValidationErrors
+	)
+	if shots {
+		if len(req.LangOverride) > 0 {
+			errs = append(errs, failure.ValidationError{Pointer: "/languages", Message: "languages are not used by a screenshots script"})
+		}
+	} else {
+		langs = script.Languages(req.LangOverride, s.Languages)
+		errs = script.Validate(s, langs)
+		var voiceErrs failure.ValidationErrors
+		chosen, voiceErrs = voices.Resolve(langs, s.Voices, catalog)
+		errs = append(errs, voiceErrs...)
+	}
 
 	// Paths in a demo resolve against the demo's folder, so a demo and its
 	// output and images move together (decision 62). The script is written by
@@ -105,20 +121,25 @@ func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 		errs = append(errs, failure.ValidationError{Pointer: "/outputDir", Message: outsideWorkDir("outputDir", cmp.Or(s.OutputDir, outputDir))})
 	}
 
-	title, description := s.Name, ""
-	if m := s.Meta; m != nil {
-		title, description = cmp.Or(m.Title, s.Name), m.Description
+	var intro, outro Card
+	if !shots {
+		title, description := s.Name, ""
+		if m := s.Meta; m != nil {
+			title, description = cmp.Or(m.Title, s.Name), m.Description
+		}
+		var introErrs, outroErrs failure.ValidationErrors
+		intro, introErrs = resolveCard(files, "intro", s.Intro, Card{Title: title, Subtitle: description}, demoDir, req.WorkDir)
+		outro, outroErrs = resolveCard(files, "outro", s.Outro, Card{Subtitle: title}, demoDir, req.WorkDir)
+		errs = append(errs, introErrs...)
+		errs = append(errs, outroErrs...)
 	}
-	intro, introErrs := resolveCard(files, "intro", s.Intro, Card{Title: title, Subtitle: description}, demoDir, req.WorkDir)
-	outro, outroErrs := resolveCard(files, "outro", s.Outro, Card{Subtitle: title}, demoDir, req.WorkDir)
-	errs = append(errs, introErrs...)
-	errs = append(errs, outroErrs...)
 	if len(errs) > 0 {
 		return Plan{}, errs
 	}
 
 	return Plan{
 		Script:    s,
+		Type:      s.Kind(),
 		Languages: langs,
 		Voices:    chosen,
 		DemoDir:   demoDir,

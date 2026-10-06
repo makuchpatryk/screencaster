@@ -8,6 +8,7 @@ import (
 	"screencaster/internal/adapters/browser"
 	"screencaster/internal/app/renderer"
 	"screencaster/internal/domain/recorder"
+	"screencaster/internal/domain/shooter"
 )
 
 // The adapters below map the renderer's port types onto the tool wrappers,
@@ -33,6 +34,23 @@ func recordInput(r renderer.RecordRequest) recorder.Input {
 		BaseURL:      r.BaseURL,
 		StorageState: r.StorageState,
 		StartImage:   r.StartImage,
+		OnStep:       r.OnStep,
+	}
+}
+
+// shooterPort is renderer.Shooter over domain/shooter.
+type shooterPort struct{ sh shooter.Shooter }
+
+func (p shooterPort) Shoot(ctx context.Context, r renderer.ShootRequest) ([]string, error) {
+	return p.sh.Shoot(ctx, shootInput(r))
+}
+
+func shootInput(r renderer.ShootRequest) shooter.Input {
+	return shooter.Input{
+		Steps:        r.Steps,
+		Dir:          r.Dir,
+		BaseURL:      r.BaseURL,
+		StorageState: r.StorageState,
 		OnStep:       r.OnStep,
 	}
 }

@@ -1,0 +1,10 @@
+name: shots-areas
+type: screenshots
+baseUrl: http://host.docker.internal:3000
+steps:
+  - goto: /projects
+  - screenshot: true
+  - screenshot: {}
+  - screenshot: { fullPage: true }
+  - screenshot: { selector: "#list" }
+  - screenshot: { clip: { x: 10, y: 20, width: 300, height: 200 } }

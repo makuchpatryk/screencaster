@@ -1,0 +1,23 @@
+name: projects-screens
+type: screenshots
+baseUrl: http://host.docker.internal:3000
+storageState:                  # optional; omit for a public site
+  cookies:
+    - name: session
+      value: <session cookie value>
+      domain: host.docker.internal
+      path: /
+steps:
+  - goto: /projects
+  - screenshot: true           # the viewport, 01.png
+  - screenshot: { fullPage: true }
+  - screenshot: { selector: "#project-list" }
+  - screenshot: { clip: { x: 0, y: 0, width: 960, height: 540 } }
+  - click: role=button[name="New project"]
+  - wait: "#new-project-dialog"
+  - screenshot:
+      annotate:
+        selector: role=button[name="Create"]
+        box: true
+        arrow: true
+        label: Click Create

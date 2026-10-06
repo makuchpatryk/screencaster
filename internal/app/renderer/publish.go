@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 )
@@ -46,6 +47,48 @@ func publish(files Files, outputDir, name string, ts time.Time, outs []Output) (
 		published = append(published, Output{Lang: o.Lang, Path: dsts[i], DurationMs: o.DurationMs})
 	}
 	return published, nil
+}
+
+// shotFile matches the names domain/shooter.ShotName gives a PNG: two digits,
+// or three past 99 shots. Only such files in the screenshots folder belong to
+// the tool.
+var shotFile = regexp.MustCompile(`^\d{2,3}\.png$`)
+
+// publishShots moves the temp PNGs into dir under their own names, replacing
+// the files of the previous run, then removes the NN.png files this run did
+// not write. It never removes the folder or any other file. This is the
+// deliberate exception to BR-006: the paths are stable so docs can embed the
+// images (decision 73). Rename replaces a target, and a cross-filesystem copy
+// still goes through <dst>.part created with CreateExcl, so no existing file is
+// opened for writing. If a move fails part-way, dir holds a mix of new and old
+// shots and the error names the one that failed.
+func publishShots(files Files, dir string, src []string) ([]string, error) {
+	if err := files.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create screenshots dir: %w", err)
+	}
+	dsts := make([]string, len(src))
+	fresh := make(map[string]bool, len(src))
+	for i, s := range src {
+		dsts[i] = filepath.Join(dir, filepath.Base(s))
+		if err := move(files, s, dsts[i]); err != nil {
+			return nil, err
+		}
+		fresh[filepath.Base(s)] = true
+	}
+
+	entries, err := files.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read screenshots dir: %w", err)
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !shotFile.MatchString(e.Name()) || fresh[e.Name()] {
+			continue
+		}
+		if err := files.Remove(filepath.Join(dir, e.Name())); err != nil {
+			return nil, fmt.Errorf("remove stale screenshot: %w", err)
+		}
+	}
+	return dsts, nil
 }
 
 // move renames src to dst. When they are on different filesystems it copies

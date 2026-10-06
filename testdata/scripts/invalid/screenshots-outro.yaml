@@ -1,0 +1,6 @@
+name: demo
+type: screenshots
+baseUrl: http://host.docker.internal:3000
+outro: { title: Bye }
+steps:
+  - screenshot: true

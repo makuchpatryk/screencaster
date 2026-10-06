@@ -31,6 +31,13 @@ const (
 //go:embed cursor.js
 var cursorJS string
 
+//go:embed overlay.js
+var overlayJS string
+
+// annotationID names the overlay element overlay.js draws into; Capture removes
+// it by this id, so the two must change together.
+const annotationID = "__sc_annot"
+
 // Launcher starts browser sessions. DriverDir is where the Playwright driver
 // is installed; empty means the library default, which honours
 // PLAYWRIGHT_DRIVER_PATH. Wired in main.
@@ -231,6 +238,54 @@ func (s *Session) screenshot(sh Shot) error {
 		return fmt.Errorf("screenshot %s: %w", sh.Out, err)
 	}
 	return nil
+}
+
+// Capture writes one PNG of the page to path (screenshots scripts). With
+// shot.Annotate set, the markers are drawn first and removed again before
+// Capture returns, so they never reach the next shot. Animations are stopped
+// and the caret hidden, so a static page gives the same pixels each run (BR-001).
+// Every wait is bounded by executor.ActionTimeout.
+func (s *Session) Capture(shot script.Screenshot, path string) error {
+	if a := shot.Annotate; a != nil {
+		opts := map[string]any{"box": a.Box, "arrow": a.Arrow, "dim": a.Dim, "label": a.Label}
+		if _, err := s.page.Locator(a.Selector).Evaluate(overlayJS, opts); err != nil {
+			return fmt.Errorf("annotate %s: %w", a.Selector, err)
+		}
+		defer func() { _, _ = s.page.Evaluate(`document.getElementById("` + annotationID + `")?.remove()`) }()
+	}
+	var err error
+	if shot.Selector != "" {
+		_, err = s.page.Locator(shot.Selector).Screenshot(locatorScreenshotOptions(path))
+	} else {
+		_, err = s.page.Screenshot(pageScreenshotOptions(shot, path))
+	}
+	return err
+}
+
+// pageScreenshotOptions maps a viewport, full-page or clip shot to Playwright's
+// options. The clip is in px from the viewport's top-left corner.
+func pageScreenshotOptions(shot script.Screenshot, path string) playwright.PageScreenshotOptions {
+	o := playwright.PageScreenshotOptions{
+		Path:       playwright.String(path),
+		Animations: playwright.ScreenshotAnimationsDisabled,
+		Caret:      playwright.ScreenshotCaretHide,
+	}
+	if shot.FullPage {
+		o.FullPage = playwright.Bool(true)
+	}
+	if c := shot.Clip; c != nil {
+		o.Clip = &playwright.Rect{X: float64(c.X), Y: float64(c.Y), Width: float64(c.Width), Height: float64(c.Height)}
+	}
+	return o
+}
+
+// locatorScreenshotOptions maps an element shot to Playwright's options.
+func locatorScreenshotOptions(path string) playwright.LocatorScreenshotOptions {
+	return playwright.LocatorScreenshotOptions{
+		Path:       playwright.String(path),
+		Animations: playwright.ScreenshotAnimationsDisabled,
+		Caret:      playwright.ScreenshotCaretHide,
+	}
 }
 
 // Start opens the page. When VideoDir is set, recording begins here.

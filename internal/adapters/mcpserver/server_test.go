@@ -183,7 +183,7 @@ func TestServer_listsToolsAndPrompt(t *testing.T) {
 		}
 	}
 	slices.Sort(tools)
-	if want := []string{"explore_page", "get_options", "get_render_status", "render_video"}; !slices.Equal(tools, want) {
+	if want := []string{"explore_page", "get_options", "get_render_status", "render_video", "take_screenshots"}; !slices.Equal(tools, want) {
 		t.Errorf("tools = %v, want %v", tools, want)
 	}
 
@@ -576,6 +576,7 @@ func TestHandlers_writeNothingToStdout(t *testing.T) {
 	e.writeFile("demos/ok.yaml", validScript)
 	e.call(t, "render_video", map[string]any{"script": "demos/ok.yaml"})
 	e.call(t, "render_video", map[string]any{"script": "demos/none.yaml"})
+	e.call(t, "take_screenshots", map[string]any{"script": "demos/ok.yaml"})
 	e.call(t, "get_render_status", map[string]any{"jobId": "job-a"})
 	e.call(t, "get_options", map[string]any{})
 	e.call(t, "explore_page", map[string]any{"url": "http://app/"})

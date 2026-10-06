@@ -1,6 +1,7 @@
 package script
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -35,6 +36,34 @@ type (
 	Pause      struct{ D time.Duration }
 )
 
+// Screenshot captures a PNG (screenshots scripts only). At most one of
+// Selector, FullPage and Clip is set (the schema checks); none means the
+// viewport. Annotate, when set, is drawn first.
+type Screenshot struct {
+	Selector string
+	FullPage bool
+	Clip     *Clip
+	Annotate *Annotate
+}
+
+// Clip is a region in px from the viewport's top-left corner.
+type Clip struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// Annotate draws markers around one element; at least one marker is set
+// (the schema checks).
+type Annotate struct {
+	Selector string `json:"selector"`
+	Box      bool   `json:"box,omitempty"`
+	Arrow    bool   `json:"arrow,omitempty"`
+	Dim      bool   `json:"dim,omitempty"`
+	Label    string `json:"label,omitempty"`
+}
+
 func (Goto) Name() string       { return "goto" }
 func (Click) Name() string      { return "click" }
 func (Hover) Name() string      { return "hover" }
@@ -45,6 +74,7 @@ func (ScrollTo) Name() string   { return "scroll" }
 func (ScrollInto) Name() string { return "scroll" }
 func (WaitFor) Name() string    { return "wait" }
 func (Pause) Name() string      { return "wait" }
+func (Screenshot) Name() string { return "screenshot" }
 
 func (a Goto) Target() string       { return a.URL }
 func (a Click) Target() string      { return a.Selector }
@@ -57,10 +87,27 @@ func (a ScrollInto) Target() string { return a.Selector }
 func (a WaitFor) Target() string    { return a.Selector }
 func (Pause) Target() string        { return "" }
 
+// Target is the element shot's selector, else the annotated element's, else "".
+func (a Screenshot) Target() string {
+	if a.Selector == "" && a.Annotate != nil {
+		return a.Annotate.Selector
+	}
+	return a.Selector
+}
+
 // selectorValue is the object form of fill and select.
 type selectorValue struct {
 	Selector string `json:"selector"`
 	Value    string `json:"value"`
+}
+
+// screenshotValue is the object form of screenshot; `true` is the bare
+// viewport shot.
+type screenshotValue struct {
+	Selector string    `json:"selector,omitempty"`
+	FullPage bool      `json:"fullPage,omitempty"`
+	Clip     *Clip     `json:"clip,omitempty"`
+	Annotate *Annotate `json:"annotate,omitempty"`
 }
 
 // UnmarshalJSON reads the keyed form. It runs after schema validation, which
@@ -94,8 +141,8 @@ func (s *Step) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// decodeAction picks the action type from the key and, for press, scroll and
-// wait, from whether the value is a string, a number or an object.
+// decodeAction picks the action type from the key and, for press, scroll,
+// wait and screenshot, from whether the value is a string, a number or an object.
 func decodeAction(key string, raw json.RawMessage) (Action, error) {
 	var str string
 	isString := json.Unmarshal(raw, &str) == nil
@@ -135,6 +182,13 @@ func decodeAction(key string, raw json.RawMessage) (Action, error) {
 		var ms int
 		err := json.Unmarshal(raw, &ms)
 		return Pause{D: time.Duration(ms) * time.Millisecond}, err
+	case "screenshot":
+		var v screenshotValue
+		if string(bytes.TrimSpace(raw)) == "true" {
+			return Screenshot{}, nil
+		}
+		err := json.Unmarshal(raw, &v)
+		return Screenshot(v), err
 	}
 	return nil, fmt.Errorf("unknown action")
 }
@@ -178,6 +232,11 @@ func (s Step) MarshalJSON() ([]byte, error) {
 		v = a.Selector
 	case Pause:
 		v = a.D.Milliseconds()
+	case Screenshot:
+		v = true
+		if a != (Screenshot{}) {
+			v = screenshotValue(a)
+		}
 	default:
 		return nil, fmt.Errorf("unknown action %T", s.Action)
 	}

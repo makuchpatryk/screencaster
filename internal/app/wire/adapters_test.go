@@ -14,6 +14,7 @@ import (
 	"screencaster/internal/app/renderer"
 	"screencaster/internal/domain/recorder"
 	"screencaster/internal/domain/script"
+	"screencaster/internal/domain/shooter"
 )
 
 // Every field of a port request reaches the wrapper; a field added to one side
@@ -39,6 +40,27 @@ func TestRecordInput_everyFieldCrosses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) || called != 3 {
 		t.Errorf("recordInput() = %+v (OnStep called with %d), want %+v", got, called, want)
+	}
+	assertNoZeroField(t, got, "OnStep")
+}
+
+func TestShootInput_everyFieldCrosses(t *testing.T) {
+	called := -1
+	r := renderer.ShootRequest{
+		Steps:        []script.Step{{Action: script.Screenshot{}}},
+		Dir:          "/tmp/shots",
+		BaseURL:      "http://app",
+		StorageState: &script.StorageState{Cookies: []script.Cookie{{Name: "s"}}},
+		OnStep:       func(i int) { called = i },
+	}
+	got := shootInput(r)
+	got.OnStep(2)
+	got.OnStep = nil
+	want := shooter.Input{
+		Steps: r.Steps, Dir: "/tmp/shots", BaseURL: "http://app", StorageState: r.StorageState,
+	}
+	if !reflect.DeepEqual(got, want) || called != 2 {
+		t.Errorf("shootInput() = %+v (OnStep called with %d), want %+v", got, called, want)
 	}
 	assertNoZeroField(t, got, "OnStep")
 }

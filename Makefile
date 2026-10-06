@@ -63,4 +63,4 @@ e2e-runtime: image
 	$(DEV_RUN) go test -c -tags e2e -o /src/.screencaster/e2e.test ./tests/e2e
 	docker run --rm --init --shm-size=1g -e SCREENCASTER_BIN=/usr/local/bin/screencaster \
 		-v $(CURDIR):/src -w /src/tests/e2e $(IMAGE) \
-		/src/.screencaster/e2e.test -test.run 'TestRender_cli|TestScreenshot_' -test.count=1 -test.v
+		/src/.screencaster/e2e.test -test.run 'TestRender_cli|TestScreenshot_|TestShots_cli' -test.count=1 -test.v

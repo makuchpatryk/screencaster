@@ -16,6 +16,8 @@ func (FS) Stat(name string) (fs.FileInfo, error)   { return os.Stat(name) }
 func (FS) Lstat(name string) (fs.FileInfo, error)  { return os.Lstat(name) }
 func (FS) Open(name string) (io.ReadCloser, error) { return os.Open(name) }
 
+func (FS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
+
 // CreateExcl opens name with O_EXCL, so an existing file is never written
 // (BR-006).
 func (FS) CreateExcl(name string) (io.WriteCloser, error) {

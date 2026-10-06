@@ -29,10 +29,10 @@ Prefer the boring solution. Add a dependency or abstraction only when the plain 
 Build for the PRD, not for what might come.
 
 - Delete code with no caller: unused functions, struct fields, config keys, schema properties.
-- Keep PRD §10.3 out: login steps, masking, other formats, cloud TTS, web UI, auto-deletion, CI-triggered renders, schema-only tool.
-- Keep PRD §10.2 out: slides between steps, overlays, multi-tenancy (the start and end cards are in, decision 63). No hooks "for later" beyond what ARCHITECTURE §15 already names.
+- Keep PRD §10.3 out: login steps, masking, other formats, cloud TTS, web UI, auto-deletion, CI-triggered renders, schema-only tool. PNG screenshots are the one format in (decision 72): no JPEG, other sizes, device scale or several annotations per shot.
+- Keep PRD §10.2 out: slides between steps, overlays in videos, multi-tenancy (the start and end cards are in, decision 63; overlays are in for screenshots only, decision 74, with fixed colours and placement and no styling options). No hooks "for later" beyond what ARCHITECTURE §15 already names.
 - No second TTS engine (the `tts.Engine` seam is ready for one), browser, storage backend or output format. Only languages are open-ended (BR-002).
-- `Recorder`, `Synthesizer`, `Assembler`, `Cards` and `Files` (in `app/renderer`), `Store` (in `app/jobs`) and `Page`/`Session` (in `domain/executor`/`domain/recorder`) exist as test seams, not for swapping Chromium, ffmpeg, SQLite or the disk. No interface without a test seam. **Deviation:** `tts.Engine` is also a deliberate swap seam for the TTS engine (Decision 65, user choice); it is two methods, with a static switch to pick the adapter.
+- `Recorder`, `Shooter`, `Synthesizer`, `Assembler`, `Cards` and `Files` (in `app/renderer`), `Store` (in `app/jobs`) and `Page`/`Session` (in `domain/executor`/`domain/recorder`/`domain/shooter`) exist as test seams, not for swapping Chromium, ffmpeg, SQLite or the disk. No interface without a test seam. **Deviation:** `tts.Engine` is also a deliberate swap seam for the TTS engine (Decision 65, user choice); it is two methods, with a static switch to pick the adapter.
 - No retries, backoff or configurable timeouts. BR-004: one 30 s timeout, then abort.
 - No scale design. One worker, one SQLite file, one render at a time (BR-008).
 
@@ -44,7 +44,7 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 |---|---|
 | Script format (fields, enums, limits) | `internal/domain/script/script.schema.json`, embedded in `domain/script`. Same text feeds validation and the `render_video` tool description |
 | Step format (one action key per step and its shape) | `$defs/step` in the schema; the `explore_page` input schema points at it instead of inferring one from Go types |
-| Cross-field script rules (narration per selected language) | `domain/script`, one validate function |
+| Cross-field script rules (narration per selected language; `screenshot` steps and the video-only fields tied to `type`) | `domain/script`: `Validate`, and `checkType` run by `Parse` so `explore_page` actions are covered too |
 | Language selection, override > script > `["en"]` (BR-002) | one function, called by CLI, MCP validation and worker |
 | Voice resolution rules (BR-011) | `domain/voices`, over a provider's `Catalog` |
 | Built-in voices per language and Piper naming (`.onnx`, language from the name) | `adapters/tts/piper` (`Defaults`) |
@@ -52,6 +52,8 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 | Step semantics (FR-005) and URL resolution against `baseUrl` (BR-010) | `domain/executor` (one type switch), shared by render and `explore_page` |
 | Failure shape `{step, lang, action, target, message}` | `domain/failure` (no JSON tags), used by CLI output and MCP tool errors; its stored JSON is a record in `adapters/sqlite`, its tool JSON an output type in `adapters/mcpserver`, both pinned by golden tests |
 | Output filename and timestamp format (FR-010) | one function in `app/renderer` |
+| PNG names (`NN.png`, width by shot count) | `shooter.ShotName`; `renderer.shotFile` only recognizes them to remove stale ones |
+| Annotation drawing (box, arrow, label, dim) | `overlay.js` in `adapters/browser`; the markers' colour and placement live nowhere else |
 | Card text and the closing line per language | `domain/card` (`HTML`, `Outro`); the intro/outro defaults come from `renderer.Prepare` |
 | Path base of a demo (output folder, card images) | `renderer.Prepare`: the demo's folder, then the inside-the-work-dir check |
 | Render log wording | `app/renderer` (`Request.Log`); callers only choose where the lines go |
@@ -76,7 +78,8 @@ Layout: ARCHITECTURE §3.
 | `domain/card` | build the card page and closing line from text | do I/O, start a process or pick the language to render |
 | `domain/executor` | run one step | decide timing between steps or know about narration |
 | `domain/recorder` | run one language's steps, record offsets (BR-003) | publish files, pick output names or launch a browser itself |
-| `app/renderer` | orchestrate the pipeline, publish outputs | contain tool flags or SQL, or import a tool package |
+| `domain/shooter` | run a screenshots script's steps, name the PNGs, capture at `screenshot` steps | publish files or launch a browser itself |
+| `app/renderer` | orchestrate the pipeline (video and screenshots), publish outputs | contain tool flags or SQL, or import a tool package |
 | `app/explorer` | explore one page | enqueue, record video or take the render lock |
 | `app/jobs` | job shape, statuses, the single worker | open SQLite or import MCP SDK types |
 | `app/wire` | composition root: pick the TTS provider, map ports onto adapters | contain rules or render logic |
@@ -104,7 +107,7 @@ Applied to packages, functions and small structs.
 **Open/closed.** Extend by data or table entry, not by editing working code.
 - New language = voice file in `/work/voices`, no code (FR-018).
 - New TTS provider = one adapter package, one `wire.TTS` case, one image layer (ARCHITECTURE §15).
-- New step action = schema property under `$defs/step`, one action type in `domain/script`, one case in the executor's type switch.
+- New step action = schema property under `$defs/step`, one action type in `domain/script`, one case in the executor's type switch. **Exception:** `screenshot` is handled by `domain/shooter`, not the executor, because a capture needs an output path and a counter and the executor runs one step without files (decision 75); validation keeps it out of the executor.
 - New failure kind = a constructor for the shared `Failure`, not a new path through CLI and MCP.
 
 **Liskov substitution.** Fakes of `Recorder`, `Synthesizer`, `Assembler`, `Cards` and `Session` return the same error types, respect `ctx` cancellation and leave no files behind, like the real ones. The executor behaves identically in both modes except visuals, so an explore selector works in a render (FR-017 AC3).
@@ -152,9 +155,9 @@ CI is as specified in PRD §18. `make lint`, `make vet` and `make test` run the 
 |---|---|
 | `golangci-lint` (with a `depguard` rule for the import boundaries above) | unused code, error handling, boundary rules |
 | `go test ./...` in the one module | domain and use-case rules (resolution, validation, timing math), queue order and recovery, schema accepts the example script and rejects invalid samples |
-| `make e2e` in the dev image (CI `e2e` job and local, Decision 68) | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render |
+| `make e2e` in the dev image (CI `e2e` job and local, Decision 68) | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render, screenshot sizes and annotation pixels |
 | `make image` + `make image-check` (CI `image` job) | base and provider image build, built-in voices (names from `piper.Defaults`, checked by `providers/piper/image-check.sh`) present |
-| `make e2e-runtime` (local) | the image's own binary, Chromium, Piper and ffmpeg render a video |
+| `make e2e-runtime` (local) | the image's own binary, Chromium, Piper and ffmpeg render a video and take screenshots |
 
 Everything not in this table is a review point.
 
@@ -181,4 +184,6 @@ Everything not in this table is a review point.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
 - `modernc.org/sqlite` is pinned to v1.50.0 in `go.mod`, the newest release that builds on Go 1.25 (v1.60 needs 1.26). Bump it together with the Go version.
 - The `>> nth=<i>` suffix from `explore_page` assumes the matches appear in the snapshot in DOM order. It holds for ordinary pages; a page that reorders elements visually only is not covered.
+- A screenshots run needs a TTS provider configured: `cmd/screencaster` calls `wire.TTS` when a render starts and `screencaster-mcp` at startup, though screenshots never synthesize. Both images always set one. Splitting `NewDeps` so a screenshots-only run needs none was left out as scope creep.
+- Publishing screenshots overwrites by design (decision 73), so a move that fails part-way leaves a folder with a mix of new and old shots; the error names the file that failed. Rerunning fixes it.
 - An MCP job snapshots only its YAML (`jobs.script`). Card images and anything else the demo points at are read again when the job runs, so editing them while a job waits does change that job.

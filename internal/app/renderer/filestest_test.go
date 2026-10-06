@@ -82,6 +82,12 @@ func (f *memFS) Open(name string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
+func (f *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fs.ReadDir(f.m, key(name))
+}
+
 func (f *memFS) CreateExcl(name string) (io.WriteCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

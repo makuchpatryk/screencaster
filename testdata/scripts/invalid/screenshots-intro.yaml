@@ -1,0 +1,6 @@
+name: demo
+type: screenshots
+baseUrl: http://host.docker.internal:3000
+intro: false
+steps:
+  - screenshot: true

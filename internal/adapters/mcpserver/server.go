@@ -52,13 +52,14 @@ type Deps struct {
 
 type handlers struct{ Deps }
 
-// New returns the MCP server with its four tools and one prompt.
+// New returns the MCP server with its five tools and one prompt.
 func New(d Deps, version string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: version},
 		&mcp.ServerOptions{Logger: slog.Default()})
 	h := handlers{d}
 
 	mcp.AddTool(s, &mcp.Tool{Name: "render_video", Description: renderDescription()}, h.renderVideo)
+	mcp.AddTool(s, &mcp.Tool{Name: "take_screenshots", Description: screenshotsDescription()}, h.takeScreenshots)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_render_status",
 		Description: "Status of a render job: queued (with position), running, succeeded (with output paths) or failed (with the failing step).",
@@ -102,7 +103,27 @@ func renderDescription() string {
 		"Example script:\n" + string(script.ExampleYAML())
 }
 
-// ---- render_video ----
+// screenshotsDescription points at render_video's schema instead of repeating
+// it, and shows the screenshots example (a test keeps it valid).
+func screenshotsDescription() string {
+	return "Queue PNG screenshots of the app instead of a video. `script` is the path of a YAML script with `type: screenshots`, " +
+		"relative to the project directory. Each `screenshot` step captures a PNG (the viewport, the full page, one element or a clip region, " +
+		"optionally annotated with a box, arrow, label or dim) into <outputDir>/<name>/screenshots/01.png, 02.png, ... in step order. " +
+		"A rerun overwrites those files and removes numbered shots it no longer produces. There is no narration, language, voice or card. " +
+		"The script is validated now; on success the job is queued and its id and queue position are returned. " +
+		"Poll `get_render_status` with the id: its outputs list the PNG paths. " +
+		"The full script schema is in render_video's description.\n\n" +
+		"Example script:\n" + string(script.ExampleScreenshotsYAML())
+}
+
+// scriptTools names the tool that queues each script type, for the message a
+// script sent to the wrong one gets.
+var scriptTools = map[string]string{
+	script.TypeVideo:       "render_video",
+	script.TypeScreenshots: "take_screenshots",
+}
+
+// ---- render_video, take_screenshots ----
 
 type renderIn struct {
 	Script    string   `json:"script" jsonschema:"path of the YAML script relative to the project directory"`
@@ -116,40 +137,69 @@ type renderOut struct {
 }
 
 func (h handlers) renderVideo(ctx context.Context, _ *mcp.CallToolRequest, in renderIn) (*mcp.CallToolResult, renderOut, error) {
+	out, err := h.enqueue(ctx, in.Script, in.Languages, script.TypeVideo)
+	return nil, out, err
+}
+
+type shotsIn struct {
+	Script string `json:"script" jsonschema:"path of the YAML script (type: screenshots) relative to the project directory"`
+}
+
+func (h handlers) takeScreenshots(ctx context.Context, _ *mcp.CallToolRequest, in shotsIn) (*mcp.CallToolResult, renderOut, error) {
+	out, err := h.enqueue(ctx, in.Script, nil, script.TypeScreenshots)
+	return nil, out, err
+}
+
+// enqueue validates the script now and queues a job for it, or fails with a
+// tool error and no job row (FR-012). kind is the script type the calling tool
+// takes; a script of the other type is refused with the tool to use instead.
+func (h handlers) enqueue(ctx context.Context, scriptPath string, languages []string, kind string) (renderOut, error) {
 	// The tool input is LLM-written, so the script path is not trusted (decision 58).
-	path, err := renderer.ScriptPath(h.WorkDir, in.Script)
+	path, err := renderer.ScriptPath(h.WorkDir, scriptPath)
 	if err != nil {
-		return nil, renderOut{}, err
+		return renderOut{}, err
 	}
 	installed, err := h.Voices()
 	if err != nil {
-		return nil, renderOut{}, err
+		return renderOut{}, err
 	}
 	// Read once: the bytes validated here are the bytes the job renders, even
 	// if the file changes while the job waits (ARCHITECTURE §10).
 	data, err := renderer.ReadScript(h.Files, path)
 	if err != nil {
-		return nil, renderOut{}, err
+		return renderOut{}, err
 	}
-	plan, err := renderer.Prepare(renderer.Request{WorkDir: h.WorkDir, ScriptPath: in.Script, Script: data, LangOverride: in.Languages}, installed, h.Files)
+	// The type check comes before Prepare, so a script sent to the wrong tool
+	// is told so instead of getting that tool's voice or language errors. A
+	// script that does not parse falls through to Prepare for its own errors.
+	if s, err := script.Parse(data); err == nil && s.Kind() != kind {
+		return renderOut{}, fmt.Errorf("script type is %s; use %s", s.Kind(), scriptTools[s.Kind()])
+	}
+	plan, err := renderer.Prepare(renderer.Request{WorkDir: h.WorkDir, ScriptPath: scriptPath, Script: data, LangOverride: languages}, installed, h.Files)
 	if err != nil {
-		return nil, renderOut{}, err // a tool error, and no job row (FR-012)
+		return renderOut{}, err
+	}
+	// A screenshots job stores no languages: the worker passes them back as the
+	// override, which a screenshots script rejects.
+	langs := plan.Languages
+	if langs == nil {
+		langs = []string{}
 	}
 	id := h.NewID()
 	pos, err := h.Store.Insert(ctx, jobs.NewJob{
-		ID: id, ScriptPath: in.Script, Script: data, DemoName: plan.Script.Name, Languages: plan.Languages,
+		ID: id, ScriptPath: scriptPath, Script: data, DemoName: plan.Script.Name, Languages: langs,
 	})
 	if err != nil {
-		return nil, renderOut{}, err
+		return renderOut{}, err
 	}
 	h.Worker.Notify()
-	return nil, renderOut{JobID: id, Status: string(jobs.Queued), Position: pos}, nil
+	return renderOut{JobID: id, Status: string(jobs.Queued), Position: pos}, nil
 }
 
 // ---- get_render_status ----
 
 type statusIn struct {
-	JobID string `json:"jobId" jsonschema:"id returned by render_video"`
+	JobID string `json:"jobId" jsonschema:"id returned by render_video or take_screenshots"`
 }
 
 type statusOut struct {
@@ -166,10 +216,12 @@ type statusOut struct {
 
 // outputOut and errorOut are the tool's JSON for renderer.Output and
 // failure.Failure; the domain types carry no tags (ARCHITECTURE §9).
+// A video output always has a language and a duration; a screenshot has
+// neither, so both are omitted when empty.
 type outputOut struct {
-	Lang       string `json:"lang"`
+	Lang       string `json:"lang,omitempty"`
 	Path       string `json:"path"`
-	DurationMs int64  `json:"durationMs"`
+	DurationMs int64  `json:"durationMs,omitempty"`
 }
 
 type errorOut struct {

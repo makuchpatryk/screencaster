@@ -55,6 +55,21 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
 
    **Start and end cards.** Every video starts with a 3 s card (the `meta` title and description) and ends with a 3 s card (a closing line in the video's language and the title), so it looks finished without an editing step. `intro` and `outro` change a card: `image` shows your picture full-frame (scaled to fit on a dark background; give it instead of `title` and `subtitle`), `title` and `subtitle` change the text, `durationMs` the time (500 to 10000), and `false` drops the card. The video is 6 s longer than the recording; use `intro: false` and `outro: false` for the plain recording. A demo for `demos/my-demo.yaml` with a logo keeps it in `demos/assets/logo.png`.
 
+   **Screenshots.** Set `type: screenshots` to get PNGs of the site instead of a video. The steps are the same, and each `screenshot` step captures one PNG: `screenshot: true` for the viewport, or `screenshot: { fullPage: true }`, `{ selector: "#panel" }` or `{ clip: { x: 0, y: 0, width: 800, height: 450 } }`. Add `annotate` to draw a marker around one element first: `box`, `arrow`, `label` (text) and `dim` (darkens the rest). There is no narration, `languages`, `voices`, `intro` or `outro`, and no TTS or ffmpeg runs, so it takes seconds:
+   ```yaml
+   name: projects-screens
+   type: screenshots
+   baseUrl: http://host.docker.internal:3000
+   steps:
+     - goto: /projects
+     - screenshot: true                         # 01.png, the viewport
+     - screenshot: { fullPage: true }           # 02.png
+     - click: role=button[name="New project"]
+     - screenshot:                              # 03.png, with markers
+         annotate: { selector: 'input[name="name"]', box: true, arrow: true, label: Name your project }
+   ```
+   The PNGs go to `<outputDir>/<name>/screenshots/01.png`, `02.png`, ... in step order, `demos/output/projects-screens/screenshots/` here. A rerun overwrites them and removes numbered shots it no longer makes; other files in that folder are never touched. This is the one exception to "never overwritten" (stable paths for docs that embed the images).
+
 4. **Render**:
    - CLI: `screencaster render demos/my-demo.yaml` (`--lang en,pl` overrides the script's `languages`); it prints what it does on stderr (a start summary, one line per phase and language with its time, an end summary) and the video paths on stdout
    - MCP (in Claude Code): describe what you want, Claude writes the YAML and renders
@@ -102,6 +117,7 @@ E2E runs in CI on every push and PR (`e2e` job) and locally with `make e2e`. Run
 
 - `demos/*.yaml` — stored demo scripts (created via chat or CLI)
 - `demos/output/*.mp4` — rendered videos, in `output/` next to the demo that made them, never overwritten (BR-006, FR-010)
+- `demos/output/<name>/screenshots/NN.png` — the shots of a `type: screenshots` script, overwritten on rerun (FR-020)
 
 ## Key constraints
 
@@ -132,7 +148,7 @@ E2E runs in CI on every push and PR (`e2e` job) and locally with `make e2e`. Run
 }
 ```
 
-- Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `get_render_status`, `explore_page` (takes an absolute `url` and an optional inline `storageState`; returns the accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
+- Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `take_screenshots` (the same for a `type: screenshots` script; `get_render_status` then lists the PNG paths), `get_render_status`, `explore_page` (takes an absolute `url` and an optional inline `storageState`; returns the accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
 - Prompt: `/mcp__screencaster__create_demo [description]` asks for languages, voices, audience, title, base URL and login (if any) in one message, explores the app, writes `demos/<name>.yaml` and renders it.
 - Jobs run one at a time, oldest first, and are kept in `.screencaster/jobs.db`. Jobs still queued or running when the server stops are marked `failed` with `interrupted` at the next start; they do not resume.
 - A CLI render and a queued job never run together: both take `.screencaster/render.lock`, and a job waits for it while still `queued`.

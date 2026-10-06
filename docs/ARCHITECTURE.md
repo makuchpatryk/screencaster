@@ -62,17 +62,18 @@ internal/
     card/                  built-in start/end card page                       FR-009
     executor/              step execution (two modes)                         FR-005, FR-006
     recorder/              one language: steps -> video + offsets             FR-004, FR-007
+    shooter/               one screenshots run: steps -> PNGs                 FR-020
   app/                     use cases; reach tools only through ports
-    renderer/              Prepare (plan.go), Render (render.go), publish (publish.go)  FR-008, FR-010
+    renderer/              Prepare (plan.go), Render (render.go), publish (publish.go)  FR-008, FR-010, FR-020
     explorer/              explore_page logic                                 FR-017
     jobs/                  Job, statuses, the single worker, Store port       FR-014, FR-015
     wire/                  composition root: TTS factory, NewDeps, port -> adapter mapping
   adapters/                one external tool or protocol each
-    browser/               playwright-go: launch, context, screenshots        FR-004
+    browser/               playwright-go: launch, context, screenshots, overlay.js  FR-004, FR-020
     assembler/             ffmpeg: mix, cards, transcode, mux, tags           FR-009
     tts/                   Engine contract; piper/ (the only Piper code), wav/ (clip length)  FR-003
     sqlite/                jobs table, stored JSON, startup clean-up          FR-014, FR-015
-    mcpserver/             MCP tools and prompt                               FR-012, 013, 017, 018, 019
+    mcpserver/             MCP tools and prompt                               FR-012, 013, 017, 018, 019, 020
     lock/                  flock-based render lock                            §6.3
     osfs/                  the real file system behind renderer.Files
 tests/e2e/                 same module, //go:build e2e
@@ -85,15 +86,15 @@ The JSON Schema sits next to the code that embeds it (`internal/domain/script`),
 **Dependency rules**
 
 - `domain` imports nothing from `app`, `adapters` or `cmd`, and no tool library (`os/exec`, playwright-go, SQLite, MCP SDK).
-- `app` reaches tools only through ports it declares (`Synthesizer`, `Recorder`, `Assembler`, `Cards`, `Files` in `renderer`; `Store` in `jobs`). `app/wire` is the one exception: the composition root that maps the ports onto the adapters.
+- `app` reaches tools only through ports it declares (`Synthesizer`, `Recorder`, `Shooter`, `Assembler`, `Cards`, `Files` in `renderer`; `Store` in `jobs`). `app/wire` is the one exception: the composition root that maps the ports onto the adapters.
 - Only `adapters/tts/piper`, `adapters/assembler` and `adapters/browser` start subprocesses; only `adapters/browser` calls playwright-go; only `adapters/sqlite` opens SQLite; only `adapters/mcpserver` and `cmd/screencaster-mcp` use the MCP SDK. `cmd/screencaster` imports neither the MCP server nor the job store.
 - Both mains get the pipeline from `wire.TTS` and `wire.NewDeps`; neither builds a tool itself.
-- The renderer's port types (`RecordRequest`, `AssembleRequest`, ...) repeat the wrappers' input shapes on purpose, and `wire` maps them field by field. That is duplication in letter, accepted so `renderer` names no tool package. Unit tests use fakes; only e2e uses the real tools.
+- The renderer's port types (`RecordRequest`, `ShootRequest`, `AssembleRequest`, ...) repeat the wrappers' input shapes on purpose, and `wire` maps them field by field. That is duplication in letter, accepted so `renderer` names no tool package. Unit tests use fakes; only e2e uses the real tools.
 - Enforced by `depguard` in `.golangci.yml` (file globs over these paths, test files included).
 
 ## 4. Render pipeline
 
-`renderer.Render(ctx, Deps, Request)` is the single code path for CLI and MCP (BR-001, FR-011); the caller is the only difference. `Deps` holds the tools, the voices, the clock and the run-ID source. `Request.Progress` and `Request.Log` report progress; the wording lives in `renderer`, the caller decides where it goes (stderr, `slog`; Decision 64).
+`renderer.Render(ctx, Deps, Request)` is the single code path for CLI and MCP (BR-001, FR-011); the caller is the only difference. This section is the video pipeline; a `type: screenshots` script takes the branch at the end of it. `Deps` holds the tools, the voices, the clock and the run-ID source. `Request.Progress` and `Request.Log` report progress; the wording lives in `renderer`, the caller decides where it goes (stderr, `slog`; Decision 64).
 
 ```mermaid
 sequenceDiagram
@@ -127,7 +128,18 @@ Rules:
 2. **Languages run sequentially**, each from a fresh browser context (FR-004).
 3. **TTS before browser**, because clip durations decide step timing (FR-003). `synthesizeAll` makes the clips of one language, at most `ttsWorkers` at a time (1 today, Decision 71); the failure reported is always the lowest failing step. Cards come right after TTS, so a card problem fails before the slow part.
 4. **Abort path.** The first step error cancels the context, closes the browser, deletes the temp dir and returns a `Failure`. Nothing reaches `outputDir`; a finished `en` is discarded when `pl` fails (BR-004).
-5. **Publish last.** After all languages succeed, files move into `outputDir` with one shared timestamp (FR-010, BR-006). Every target is checked for existence first, existing files are never opened for writing, a cross-filesystem move goes through `<name>.part` then rename, and a failed move removes what the job already moved.
+5. **Publish last.** After all languages succeed, files move into `outputDir` with one shared timestamp (FR-010, BR-006). Every target is checked for existence first, existing files are never opened for writing, a cross-filesystem move goes through `<name>.part` then rename, and a failed move removes what the job already moved. Screenshots are the one exception (below).
+
+### Screenshots runs (decisions 72–75)
+
+After `Prepare`, `Render` branches on `Plan.Type`. A screenshots script has no languages, voices, TTS, cards, recording or assembly:
+
+1. **Validate first.** The same rules, plus the type rules in `domain/script` (`checkType`, run by `Parse`, so `explore_page` actions are covered too). `Prepare` skips voices and cards and rejects a language override.
+2. **Shoot.** `renderShots` calls the `Shooter` port, which is `domain/shooter`: a fresh, unrecorded browser (no cursor overlay), the ordinary steps through the executor, and `Session.Capture` at each `screenshot` step, writing `NN.png` (`shooter.ShotName`) under `<tmp>/<runId>/shots/`. Capture is in `adapters/browser`: it draws the annotation overlay (`overlay.js`, document coordinates) when asked, takes the shot with animations stopped and the caret hidden, and removes the overlay again.
+3. **Publish last, with overwrite.** `publishShots` moves the PNGs into `<outputDir>/<name>/screenshots/`, replacing the previous run's files, then removes the `NN.png` files this run did not write. Other files and the folder itself are never removed, and no existing file is opened for writing (a cross-filesystem move still goes through `<dst>.part`). This is the deliberate exception to rule 5 and BR-006 (decision 73): the paths stay stable for docs that embed the images. A failure while publishing leaves a mix of new and old shots.
+4. **Abort path** as for videos: the first failing step aborts the browser, the temp dir goes and nothing reaches `outputDir`.
+
+The queue, worker and render lock (§6) are unchanged: the worker calls `Render`, which branches on the script.
 
 ## 5. Timing and synchronization model
 
@@ -165,7 +177,7 @@ t0 (end of the sync marker) ─────────────────�
 
 | Goroutine | Role |
 |-----------|------|
-| MCP server loop | Serves stdio. `render_video` validates, inserts a job and wakes the worker. `get_render_status` reads SQLite. |
+| MCP server loop | Serves stdio. `render_video` and `take_screenshots` validate, insert a job and wake the worker. `get_render_status` reads SQLite. |
 | Queue worker (exactly one) | Takes the oldest `queued` job, acquires the render lock (§6.3), sets `running`, calls `renderer.Render`, stores the result (BR-008, FR-014). |
 | `explore_page` handlers | Run on the request goroutine, serialized by a mutex. They do not wait for the worker. |
 
@@ -199,6 +211,8 @@ One implementation of FR-005 semantics, two modes:
 
 Same selectors, same URL resolution against `baseUrl` (BR-010), same error shape. That is the guarantee behind FR-017 AC3: a selector returned by `explore_page` works in a render.
 
+**Screenshot steps.** `screenshot` is a step action the executor does not run. `domain/shooter` intercepts it, because a capture needs an output path and a counter, which the executor (one step, no files) does not have; validation keeps it out of recordings and `explore_page`, and the executor's default case would return `unknown action` if one slipped through (decision 75). Every other step of a screenshots script runs through the executor in the mode `explore` uses (no visuals).
+
 **Selector strictness.** A selector matching several elements fails instead of clicking the first. The executor uses strict locators, so `explore_page` emits only selectors that match one element and disambiguates with `>> nth=N`.
 
 ## 8. `explore_page` design
@@ -225,7 +239,7 @@ type Failure struct {
 | Kind | Produced by | CLI | MCP |
 |------|-------------|-----|-----|
 | Validation (list of `{pointer, message}`) | script, voices, renderer | print, exit 1 | tool error, no job created |
-| Step | executor | print, exit 1 | `jobs.error_json` |
+| Step | executor, shooter (a capture error is a step failure for the `screenshot` step) | print, exit 1 | `jobs.error_json` |
 | TTS, Assembly, Cards, SyncMarker | tts adapter, assembler, renderer | print, exit 1 | `error_json.message` |
 | Interrupted | startup recovery | n/a | `error_json` |
 
@@ -235,14 +249,14 @@ Step, TTS, assembly, card and sync-marker failures become a `Failure` before the
 
 SQLite (`modernc.org/sqlite`), file `<work>/.screencaster/jobs.db`; schema in PRD §13. Only the MCP process opens it. The worker and the job shape are a use case (`app/jobs`); the table is an adapter (`adapters/sqlite`) behind its `Store` port.
 
-- FIFO by `(created_at, rowid)`. Timestamps use a fixed-width UTC layout so text order equals time order (Decision 57). A job's `position` counts the `queued` jobs before it plus one; a running job does not count.
+- FIFO by `(created_at, rowid)`. Timestamps use a fixed-width UTC layout so text order equals time order (Decision 57). A job's `position` counts the `queued` jobs before it plus one; a running job does not count. There is no job-kind column: a screenshots job is an ordinary job with an empty `languages` list, and the renderer tells the kind from the script (decision 75).
 - WAL mode with a busy timeout. The worker is woken by a buffered channel on insert, no polling. Recovery runs first at start (FR-015).
-- **Script snapshot.** `render_video` reads the YAML once, validates those bytes and stores them in `jobs.script`; the worker renders the stored bytes, so editing the file while a job waits changes nothing. `ScriptPath` still anchors the demo folder. Only the YAML is snapshotted: card images are read again at run time. A `jobs.db` from before the column gets it on open (`ALTER TABLE`); its rows keep `NULL`, and a job with no snapshot fails with `job has no script snapshot` (none can be queued: recovery has already failed them).
+- **Script snapshot.** `render_video` and `take_screenshots` read the YAML once, validates those bytes and stores them in `jobs.script`; the worker renders the stored bytes, so editing the file while a job waits changes nothing. `ScriptPath` still anchors the demo folder. Only the YAML is snapshotted: card images are read again at run time. A `jobs.db` from before the column gets it on open (`ALTER TABLE`); its rows keep `NULL`, and a job with no snapshot fails with `job has no script snapshot` (none can be queued: recovery has already failed them).
 - **Stored JSON.** `outputs_json` and `error_json` keep their field names; `adapters/sqlite` maps the untagged domain types (`renderer.Output`, `failure.Failure`) onto private records, and golden tests pin the bytes. `get_render_status` has its own output types in `adapters/mcpserver`, also pinned by a golden test.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: render_video
+    [*] --> queued: render_video / take_screenshots
     queued --> running: worker picks + lock held
     running --> succeeded
     running --> failed: step/tts/assembly error
@@ -259,6 +273,7 @@ stateDiagram-v2
 ├── demos/*.yaml               scripts: baseUrl, optional storageState and outputDir (FR-001)
 ├── demos/assets/*             card pictures named by intro.image / outro.image
 ├── demos/output/              <name>.<lang>.<ts>.mp4, never overwritten
+│   └── <name>/screenshots/    NN.png of a screenshots script, overwritten on rerun (decision 73)
 ├── voices/*                   extra voices for the active TTS provider (Piper: *.onnx + .json, FR-016)
 └── .screencaster/
     ├── jobs.db                MCP only
@@ -287,7 +302,7 @@ stateDiagram-v2
 |-------|-------|-------|
 | Unit | schema and cross-field rules, voice resolution, offset math, the wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler`, `Cards` |
 | Integration | SQLite store, lock semantics, MCP wiring over an in-memory transport | `go test` |
-| E2E | fixture app → real render (EN, EN+PL), output format, drift, duration ratio (NFR-001), an `explore_page` selector used in a render | `make e2e` in the dev image; `make e2e-runtime` runs the CLI tests against the runtime image (Decisions 54, 56, 68) |
+| E2E | fixture app → real render (EN, EN+PL), output format, drift, duration ratio (NFR-001), an `explore_page` selector used in a render; a screenshots run (sizes per capture area, annotation pixels, no overlay leak, overwrite and stale removal) | `make e2e` in the dev image; `make e2e-runtime` runs the CLI tests against the runtime image (Decisions 54, 56, 68) |
 
 CI runs lint, vet and `go test -race` (one `check` job), an image build (`image`) and the e2e suite in the dev image (`e2e`, Decision 68). The e2e job has no Docker layer cache, so every run builds the images.
 
@@ -301,13 +316,13 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 15. Extension points (post-MVP)
 
-- **Slides / overlays** (PRD §10.2): only start and end cards exist (Decision 63). Interleaved slides would change the recorder output and the assembler; overlays would hook in as an executor init script, like the cursor.
+- **Slides / overlays** (PRD §10.2): only start and end cards exist for videos (Decision 63). Interleaved slides would change the recorder output and the assembler. Overlays exist for screenshots only (Decision 74: `overlay.js`, drawn by `Session.Capture`); in a video they would hook in as an executor init script, like the cursor.
 - **New languages:** no code change, add the voice files under `/work/voices`.
 - **Other TTS engines:** one adapter package `internal/adapters/tts/<name>` that satisfies `tts.Engine` (`Catalog`, and `Synthesize` into a PCM WAV), one case in `wire.TTS`, and an image layer: a folder `providers/<name>/` (Dockerfile with `dev` and `runtime` stages on the bases, plus `image-check.sh`; local binary: fetch stage + COPY + ENV; cloud or sidecar: ENV only). No existing file changes except the `wire.TTS` case. Script voice IDs are opaque per provider, so a switch may need `voices:` edits. A network provider must revisit NFR-003 and BR-001 first. Piper is the only adapter today.
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–64 are also in the PRD log; 56, 57, 61 and 65 onwards are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61 and 65–71 are only here.
 
 | # | Decision | Why |
 |---|----------|-----|
@@ -339,6 +354,10 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–
 | 69 | Sync marker: the recorded page opens on a magenta marker held 2 s; the recorder starts t0 when it is removed, the assembler finds that frame in the WebM, cuts there and fails with `SyncMarker` if it is missing. Supersedes 46 | The video start is bimodal (0.5–1.5 s late), so a constant is wrong in some runs; a marker is measured per recording. A short flash would be missed in the late mode; an adaptive hold needs frame events Playwright does not give. Costs about 2 s per language. |
 | 70 | Steps use the keyed form: the action is the step's key (`- click: "#id"`), its value a string, number or small object; Go has one type per action shape | The schema's shape alone decides each action, so the executor needs no field checks. A breaking change: repo YAML migrated, an old-form script gets one hint. |
 | 71 | `synthesizeAll` can synthesize a language's clips in parallel, but `ttsWorkers` is 1 | Measured about 1.07× with 4 workers on the 3-clip e2e script (Piper is already multi-threaded), under the 1.3× bar. The pool stays as a tested, one-constant switch. Failure reporting is by lowest step, so results match the sequential loop. |
+| 72 | `type: video\|screenshots` on the script; keyed `screenshot: true \| {selector\|fullPage\|clip, annotate}` steps only in screenshots scripts; screenshots scripts forbid narration, intro, outro, languages and voices | `--screenshots-only` flag; screenshots as a side output of a video | User choice. One script, one output kind; the keyed object keeps one action key per step (Decision 70). |
+| 73 | Screenshots publish to `<outputDir>/<name>/screenshots/NN.png`, overwritten on rerun; stale `NN.png` removed, other files kept. Exception to BR-006 and §4 rule 5 | Timestamped run folder | User choice. Stable paths for docs and READMEs that embed the images. |
+| 74 | Annotations (box, arrow, label, dim) are a DOM overlay in document coordinates, injected before the capture and removed after; opt-in per step | Go image post-processing | User choice. Chromium already renders the text and glyphs; no new dependency. |
+| 75 | `domain/shooter` runs a screenshots run and intercepts `screenshot` steps; the executor is unchanged; the renderer reaches it through a `Shooter` port wired in `app/wire`. `take_screenshots` reuses the queue, worker, lock and `get_render_status`; no job-kind column | `Page.Screenshot` plus an executor case; the capture loop in `adapters/browser`; a separate queue | The executor stays file-agnostic and its fakes untouched; step semantics stay in one place; the renderer branches on the script type, so the worker needs no change. |
 
 ## 17. Open items for spikes
 

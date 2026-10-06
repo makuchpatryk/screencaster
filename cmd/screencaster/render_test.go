@@ -161,6 +161,28 @@ func TestRun_progressGoesToStderr(t *testing.T) {
 	}
 }
 
+// A screenshots render has no language: progress drops the [lang] prefix and
+// stdout lists every PNG, one per line (decision 72).
+func TestRun_screenshotsProgressHasNoLanguageAndPathsListEveryPNG(t *testing.T) {
+	fake := func(_ context.Context, req renderer.Request) ([]renderer.Output, error) {
+		req.Progress("", 1, 3, "goto", "/")
+		req.Progress("", 2, 3, "screenshot", "")
+		req.Progress("", 3, 3, "screenshot", "#form")
+		return []renderer.Output{{Path: "/work/demos/output/a/screenshots/01.png"}, {Path: "/work/demos/output/a/screenshots/02.png"}}, nil
+	}
+	var stdout, stderr bytes.Buffer
+
+	if code := run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if want := "step 1/3 goto /\nstep 2/3 screenshot\nstep 3/3 screenshot #form\n"; stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
+	if want := "/work/demos/output/a/screenshots/01.png\n/work/demos/output/a/screenshots/02.png\n"; stdout.String() != want {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func TestRun_logLinesGoToStderrAndPathsToStdout(t *testing.T) { // decision 64
 	fake := func(_ context.Context, req renderer.Request) ([]renderer.Output, error) {
 		req.Log("render start: demos/a.yaml name=a")

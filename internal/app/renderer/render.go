@@ -108,6 +108,23 @@ type Cards interface {
 	Screenshot(ctx context.Context, shots []Shot) error
 }
 
+// ShootRequest is one screenshots run (repeats domain/shooter.Input on
+// purpose, ARCHITECTURE §3). OnStep, when set, is called with the 0-based index
+// right before each step runs.
+type ShootRequest struct {
+	Steps        []script.Step
+	Dir          string // PNGs are written here
+	BaseURL      string
+	StorageState *script.StorageState // nil: logged-out session
+	OnStep       func(i int)
+}
+
+// Shooter runs a screenshots script and returns the PNG paths in step order.
+// A step failure comes back as *failure.Failure; a cancelled ctx as ctx.Err().
+type Shooter interface {
+	Shoot(ctx context.Context, r ShootRequest) ([]string, error)
+}
+
 // Deps are the collaborators and the environment of a render, wired by
 // app.NewDeps.
 // Now and RunID are injected so tests get fixed names (CODE_QUALITY, SOLID).
@@ -116,13 +133,15 @@ type Deps struct {
 	Rec    Recorder
 	Asm    Assembler
 	Cards  Cards
+	Shots  Shooter
 	Files  Files
 	Voices voices.Catalog
 	Now    func() time.Time
 	RunID  func() string
 }
 
-// Output is one published video.
+// Output is one published file: a video per language, or a PNG of a
+// screenshots script (Lang empty, DurationMs 0).
 type Output struct {
 	Lang       string
 	Path       string // absolute
@@ -149,12 +168,14 @@ func (r reporter) since(t time.Time) string { return round(r.now().Sub(t)) }
 
 func round(d time.Duration) string { return d.Round(100 * time.Millisecond).String() }
 
-// Render validates the request, renders every selected language in order and
-// publishes the MP4s only when all of them succeeded (BR-004, FR-010). Work
-// happens under <work>/.screencaster/tmp/<runId>, which is removed on every
-// path. A step, TTS or assembly problem comes back as *failure.Failure; a
-// cancelled ctx as ctx.Err(). Once the script is accepted, Request.Log gets a
-// start line, one line per phase and language, and an end line (decision 64).
+// Render validates the request and renders by the script's type. A video
+// script renders every selected language in order and publishes the MP4s only
+// when all of them succeeded (BR-004, FR-010); a screenshots script takes its
+// PNGs and publishes them (decision 73). Work happens under
+// <work>/.screencaster/tmp/<runId>, which is removed on every path. A step,
+// TTS or assembly problem comes back as *failure.Failure; a cancelled ctx as
+// ctx.Err(). Once the script is accepted, Request.Log gets a start line, one
+// line per phase and language, and an end line (decision 64).
 func Render(ctx context.Context, d Deps, req Request) (_ []Output, err error) {
 	start := d.Now() // FR-010: the job start time names every output
 	plan, err := Prepare(req, d.Voices, d.Files)
@@ -163,8 +184,13 @@ func Render(ctx context.Context, d Deps, req Request) (_ []Output, err error) {
 	}
 
 	rep := reporter{progress: req.Progress, log: req.Log, now: d.Now}
-	rep.logf("render start: %s name=%s languages=%s voices=%s steps=%d output=%s",
-		req.ScriptPath, plan.Script.Name, strings.Join(plan.Languages, ","), voiceNames(plan), len(plan.Script.Steps), plan.OutputDir)
+	if plan.Type == script.TypeScreenshots {
+		rep.logf("render start: %s name=%s type=screenshots steps=%d output=%s",
+			req.ScriptPath, plan.Script.Name, len(plan.Script.Steps), plan.OutputDir)
+	} else {
+		rep.logf("render start: %s name=%s languages=%s voices=%s steps=%d output=%s",
+			req.ScriptPath, plan.Script.Name, strings.Join(plan.Languages, ","), voiceNames(plan), len(plan.Script.Steps), plan.OutputDir)
+	}
 	defer func() {
 		if err != nil {
 			rep.logf("render failed after %s", rep.since(start))
@@ -174,6 +200,14 @@ func Render(ctx context.Context, d Deps, req Request) (_ []Output, err error) {
 	runDir := filepath.Join(req.WorkDir, ".screencaster", "tmp", d.RunID())
 	defer func() { _ = d.Files.RemoveAll(runDir) }()
 
+	if plan.Type == script.TypeScreenshots {
+		return renderShots(ctx, d, plan, runDir, start, rep)
+	}
+	return renderVideo(ctx, d, plan, runDir, start, rep)
+}
+
+// renderVideo renders every language, then publishes the MP4s.
+func renderVideo(ctx context.Context, d Deps, plan Plan, runDir string, start time.Time, rep reporter) ([]Output, error) {
 	outs := make([]Output, 0, len(plan.Languages))
 	for _, lang := range plan.Languages {
 		out, err := renderLanguage(ctx, d, plan, lang, filepath.Join(runDir, lang), rep)
@@ -182,13 +216,51 @@ func Render(ctx context.Context, d Deps, req Request) (_ []Output, err error) {
 		}
 		outs = append(outs, out)
 	}
-	outs, err = publish(d.Files, plan.OutputDir, plan.Script.Name, start, outs)
+	outs, err := publish(d.Files, plan.OutputDir, plan.Script.Name, start, outs)
 	if err != nil {
 		return nil, err
 	}
 	rep.logf("render done in %s", rep.since(start))
 	for _, o := range outs {
 		rep.logf("[%s] %s (%s)", o.Lang, o.Path, round(time.Duration(o.DurationMs)*time.Millisecond))
+	}
+	return outs, nil
+}
+
+// shotsSubdir is where a screenshots script's PNGs are published:
+// <outputDir>/<name>/shotsSubdir (decision 73).
+const shotsSubdir = "screenshots"
+
+// renderShots takes the screenshots into the temp dir, then publishes them
+// over the previous run's. Nothing reaches outputDir when a step fails
+// (BR-004).
+func renderShots(ctx context.Context, d Deps, plan Plan, runDir string, start time.Time, rep reporter) ([]Output, error) {
+	shotDir := filepath.Join(runDir, "shots")
+	if err := d.Files.MkdirAll(shotDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+
+	steps := plan.Script.Steps
+	in := ShootRequest{Steps: steps, Dir: shotDir, BaseURL: plan.Script.BaseURL, StorageState: plan.Script.StorageState}
+	if rep.progress != nil {
+		in.OnStep = func(i int) { rep.progress("", i+1, len(steps), steps[i].Action.Name(), steps[i].Action.Target()) }
+	}
+	t := d.Now()
+	pngs, err := d.Shots.Shoot(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	rep.logf("screenshots: %d captured in %s", len(pngs), rep.since(t))
+
+	paths, err := publishShots(d.Files, filepath.Join(plan.OutputDir, plan.Script.Name, shotsSubdir), pngs)
+	if err != nil {
+		return nil, err
+	}
+	rep.logf("render done in %s", rep.since(start))
+	outs := make([]Output, len(paths))
+	for i, p := range paths {
+		rep.logf("%s", p)
+		outs[i] = Output{Path: p}
 	}
 	return outs, nil
 }

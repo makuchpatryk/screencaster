@@ -5,6 +5,7 @@ package script
 
 import (
 	"bytes"
+	"cmp"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,9 @@ var schemaJSON []byte
 //go:embed example.yaml
 var exampleYAML []byte
 
+//go:embed example-screenshots.yaml
+var exampleScreenshotsYAML []byte
+
 const (
 	schemaURL       = "script.schema.json"
 	defaultLanguage = "en"
@@ -35,6 +39,7 @@ const (
 // Script is a parsed demo script.
 type Script struct {
 	Name         string            `json:"name"`
+	Type         string            `json:"type"` // "" means video; see Kind
 	BaseURL      string            `json:"baseUrl"`
 	StorageState *StorageState     `json:"storageState"`
 	OutputDir    string            `json:"outputDir"`
@@ -45,6 +50,16 @@ type Script struct {
 	Outro        *Bookend          `json:"outro"`
 	Steps        []Step            `json:"steps"`
 }
+
+// The script types. A screenshots script writes PNGs at its screenshot steps
+// instead of a narrated video.
+const (
+	TypeVideo       = "video"
+	TypeScreenshots = "screenshots"
+)
+
+// Kind returns the script type with the default applied.
+func (s Script) Kind() string { return cmp.Or(s.Type, TypeVideo) }
 
 // DefaultCardMs is how long a start or end card is shown unless the script
 // says otherwise (ARCHITECTURE §5, decision 63).
@@ -126,6 +141,10 @@ func SchemaJSON() []byte { return schemaJSON }
 // description. A test keeps it valid.
 func ExampleYAML() []byte { return exampleYAML }
 
+// ExampleScreenshotsYAML returns the embedded example screenshots script, for
+// the take_screenshots tool description. A test keeps it valid.
+func ExampleScreenshotsYAML() []byte { return exampleScreenshotsYAML }
+
 var compiledSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
 	if err != nil {
@@ -182,7 +201,55 @@ func Parse(data []byte) (Script, error) {
 			Message: "baseUrl must be an absolute http or https URL: " + s.BaseURL,
 		}}
 	}
+	if errs := checkType(s); len(errs) > 0 {
+		return Script{}, errs
+	}
 	return s, nil
+}
+
+// checkType holds the rules that tie the script type to the fields and steps
+// the schema allows in any script: screenshot steps belong to a screenshots
+// script, and a screenshots script has no narration, cards, languages or
+// voices. It runs in Parse, not Validate, so ParseSteps (explore_page) rejects
+// a screenshot step too: its placeholder script is a video script.
+func checkType(s Script) failure.ValidationErrors {
+	var errs failure.ValidationErrors
+	add := func(pointer, msg string) {
+		errs = append(errs, failure.ValidationError{Pointer: pointer, Message: msg})
+	}
+	isShot := func(st Step) bool { _, ok := st.Action.(Screenshot); return ok }
+
+	if s.Kind() == TypeVideo {
+		for i, st := range s.Steps {
+			if isShot(st) {
+				add(fmt.Sprintf("/steps/%d/screenshot", i), "screenshot steps need type: screenshots")
+			}
+		}
+		return errs
+	}
+
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"languages", s.Languages != nil},
+		{"voices", s.Voices != nil},
+		{"intro", s.Intro != nil},
+		{"outro", s.Outro != nil},
+	} {
+		if f.set {
+			add("/"+f.name, f.name+" is not allowed in a screenshots script")
+		}
+	}
+	for i, st := range s.Steps {
+		if st.Narration != nil {
+			add(fmt.Sprintf("/steps/%d/narration", i), "narration is not allowed in a screenshots script")
+		}
+	}
+	if !slices.ContainsFunc(s.Steps, isShot) {
+		add("/steps", "a screenshots script needs at least one screenshot step")
+	}
+	return errs
 }
 
 // ParseSteps checks loose steps (explore_page actions, each a raw JSON
@@ -233,7 +300,7 @@ func oldStepForm(jsonData []byte) failure.ValidationErrors {
 
 // oneAction replaces the schema's property-count message on a step, the only
 // object the schema counts properties of (decision 70).
-const oneAction = "a step needs exactly one action: goto, click, fill, select, press, hover, scroll or wait"
+const oneAction = "a step needs exactly one action: goto, click, fill, select, press, hover, scroll, wait or screenshot"
 
 // schemaErrors turns the leaves of the validator's error tree into sorted,
 // de-duplicated pointer/message pairs. The inner nodes (allOf, oneOf, if/then)

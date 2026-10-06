@@ -10,6 +10,11 @@
       "type": "string",
       "pattern": "^[a-z0-9-]{1,64}$"
     },
+    "type": {
+      "description": "video renders narrated MP4s; screenshots writes PNGs at each screenshot step to <outputDir>/<name>/screenshots/",
+      "enum": ["video", "screenshots"],
+      "default": "video"
+    },
     "baseUrl": {
       "description": "Absolute http(s) URL of the app. Relative goto URLs resolve against it.",
       "type": "string",
@@ -143,6 +148,37 @@
       "type": "string",
       "minLength": 1
     },
+    "clip": {
+      "description": "Region to capture, in px from the viewport's top-left corner",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "annotate": {
+      "description": "Markers drawn around one element before the capture: box, arrow, label, dim (at least one)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector"],
+      "anyOf": [
+        { "required": ["box"] },
+        { "required": ["arrow"] },
+        { "required": ["label"] },
+        { "required": ["dim"] }
+      ],
+      "properties": {
+        "selector": { "$ref": "#/$defs/selector" },
+        "box": { "const": true },
+        "arrow": { "const": true },
+        "dim": { "const": true },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    },
     "selectorValue": {
       "type": "object",
       "additionalProperties": false,
@@ -153,7 +189,7 @@
       }
     },
     "step": {
-      "description": "One action, written as its key (goto, click, fill, select, press, hover, scroll, wait), plus optional narration. Exactly one action per step.",
+      "description": "One action, written as its key (goto, click, fill, select, press, hover, scroll, wait, screenshot), plus optional narration. Exactly one action per step.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -202,6 +238,28 @@
           "if": { "type": "integer" },
           "then": { "minimum": 1, "maximum": 30000 },
           "else": { "$ref": "#/$defs/selector" }
+        },
+        "screenshot": {
+          "description": "Capture a PNG (screenshots scripts only): true for the viewport, or { selector | fullPage | clip, annotate }",
+          "if": { "type": "boolean" },
+          "then": { "const": true },
+          "else": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "selector": { "$ref": "#/$defs/selector" },
+              "fullPage": { "const": true },
+              "clip": { "$ref": "#/$defs/clip" },
+              "annotate": { "$ref": "#/$defs/annotate" }
+            },
+            "not": {
+              "anyOf": [
+                { "required": ["selector", "fullPage"] },
+                { "required": ["selector", "clip"] },
+                { "required": ["fullPage", "clip"] }
+              ]
+            }
+          }
         }
       },
       "if": { "required": ["narration"] },

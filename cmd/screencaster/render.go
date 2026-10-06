@@ -60,7 +60,10 @@ func renderCmd(workDir string, render renderFunc, stdout, stderr io.Writer) *cob
 					if target != "" {
 						target = " " + target
 					}
-					_, _ = fmt.Fprintf(stderr, "[%s] step %d/%d %s%s\n", lang, i, n, action, target)
+					if lang != "" { // a screenshots script has no language
+						lang = "[" + lang + "] "
+					}
+					_, _ = fmt.Fprintf(stderr, "%sstep %d/%d %s%s\n", lang, i, n, action, target)
 				},
 				Log: func(msg string) { _, _ = fmt.Fprintln(stderr, msg) },
 			})

@@ -37,3 +37,27 @@ func TestCreateExcl_createsNewFile(t *testing.T) {
 		t.Errorf("file = %q, want new", b)
 	}
 }
+
+func TestReadDir_listsEntriesWithTheirTypes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "01.png"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := (FS{}).ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{} // name -> is a regular file
+	for _, e := range entries {
+		got[e.Name()] = e.Type().IsRegular()
+	}
+	if len(got) != 2 || !got["01.png"] || got["sub"] {
+		t.Errorf("entries = %v, want 01.png as a file and sub as a directory", got)
+	}
+	if _, err := (FS{}).ReadDir(filepath.Join(dir, "missing")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("ReadDir(missing) error = %v, want fs.ErrNotExist", err)
+	}
+}

@@ -52,6 +52,8 @@ func TestParse_validSamples(t *testing.T) {
 		{"valid/cards.yaml", nil, 1},
 		{"valid/silent-narration.yaml", []string{"en", "pl"}, 2},
 		{"valid/cards-text.yaml", nil, 1},
+		{"valid/screenshots-areas.yaml", nil, 6},
+		{"valid/screenshots-annotate.yaml", nil, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -193,6 +195,20 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/intro-image-not-png.yaml", "/intro/image", ""},
 		{"invalid/intro-duration-short.yaml", "/intro/durationMs", ""},
 		{"invalid/intro-unknown-field.yaml", "/intro", "color"},
+		{"invalid/screenshot-in-video.yaml", "/steps/1/screenshot", "screenshot steps need type: screenshots"},
+		{"invalid/screenshots-narration.yaml", "/steps/1/narration", "narration is not allowed in a screenshots script"},
+		{"invalid/screenshots-intro.yaml", "/intro", "intro is not allowed in a screenshots script"},
+		{"invalid/screenshots-outro.yaml", "/outro", "outro is not allowed in a screenshots script"},
+		{"invalid/screenshots-languages.yaml", "/languages", "languages is not allowed in a screenshots script"},
+		{"invalid/screenshots-voices.yaml", "/voices", "voices is not allowed in a screenshots script"},
+		{"invalid/screenshots-no-shot.yaml", "/steps", "a screenshots script needs at least one screenshot step"},
+		{"invalid/screenshot-selector-and-fullpage.yaml", "/steps/0/screenshot", ""},
+		{"invalid/screenshot-clip-and-fullpage.yaml", "/steps/0/screenshot", ""},
+		{"invalid/screenshot-false.yaml", "/steps/0/screenshot", ""},
+		{"invalid/screenshot-annotate-no-marker.yaml", "/steps/0/screenshot/annotate", "missing property 'box'"},
+		{"invalid/screenshot-annotate-no-selector.yaml", "/steps/0/screenshot/annotate", "selector"},
+		{"invalid/fullpage-on-click.yaml", "/steps/0/click", ""},
+		{"invalid/screenshot-type-unknown.yaml", "/type", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -227,6 +243,12 @@ func TestParse_oneRootCausePerBrokenStep(t *testing.T) {
 		{"invalid/intro-image-and-title.yaml", "/intro"},
 		{"invalid/intro-image-not-png.yaml", "/intro/image"},
 		{"invalid/intro-duration-short.yaml", "/intro/durationMs"},
+		{"invalid/screenshot-selector-and-fullpage.yaml", "/steps/0/screenshot"},
+		{"invalid/screenshot-clip-and-fullpage.yaml", "/steps/0/screenshot"},
+		{"invalid/screenshot-false.yaml", "/steps/0/screenshot"},
+		{"invalid/screenshot-annotate-no-selector.yaml", "/steps/0/screenshot/annotate"},
+		{"invalid/fullpage-on-click.yaml", "/steps/0/click"},
+		{"invalid/screenshots-no-shot.yaml", "/steps"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -360,6 +382,11 @@ func TestAction_nameAndTarget(t *testing.T) { // failures and CLI progress
 		{ScrollInto{Selector: "#f"}, "scroll", "#f"},
 		{Pause{D: time.Second}, "wait", ""},
 		{WaitFor{Selector: "#t"}, "wait", "#t"},
+		{Screenshot{}, "screenshot", ""},
+		{Screenshot{Selector: "#e"}, "screenshot", "#e"},
+		{Screenshot{FullPage: true}, "screenshot", ""},
+		{Screenshot{Annotate: &Annotate{Selector: "#b", Box: true}}, "screenshot", "#b"},
+		{Screenshot{Selector: "#e", Annotate: &Annotate{Selector: "#b", Box: true}}, "screenshot", "#e"},
 	}
 	for _, tt := range tests {
 		if tt.a.Name() != tt.name || tt.a.Target() != tt.target {
@@ -594,5 +621,161 @@ func TestAudiences_matchSchemaEnum(t *testing.T) {
 	}
 	if got := schema.Properties.Meta.Properties.Audience.Enum; !reflect.DeepEqual(got, Audiences) {
 		t.Errorf("schema audience enum = %v, Audiences = %v", got, Audiences)
+	}
+}
+
+func TestParse_decodesScreenshotShapes(t *testing.T) {
+	s, err := Parse(readSample(t, "valid/screenshots-areas.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Action{
+		Goto{URL: "/projects"},
+		Screenshot{},
+		Screenshot{},
+		Screenshot{FullPage: true},
+		Screenshot{Selector: "#list"},
+		Screenshot{Clip: &Clip{X: 10, Y: 20, Width: 300, Height: 200}},
+	}
+	var got []Action
+	for _, st := range s.Steps {
+		got = append(got, st.Action)
+	}
+	if !reflect.DeepEqual(got, want) { // DeepEqual: Clip is a pointer
+		t.Errorf("actions =\n%#v\nwant\n%#v", got, want)
+	}
+
+	a, err := Parse(readSample(t, "valid/screenshots-annotate.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantA := []Action{
+		Goto{URL: "/projects"},
+		Screenshot{Annotate: &Annotate{Selector: "#create", Box: true}},
+		Screenshot{Selector: "#list", Annotate: &Annotate{Selector: "#create", Box: true, Arrow: true, Dim: true, Label: "Click Create"}},
+		Screenshot{FullPage: true, Annotate: &Annotate{Selector: "#create", Label: "Here"}},
+	}
+	got = nil
+	for _, st := range a.Steps {
+		got = append(got, st.Action)
+	}
+	if !reflect.DeepEqual(got, wantA) {
+		t.Errorf("annotate actions =\n%#v\nwant\n%#v", got, wantA)
+	}
+}
+
+func TestScript_kindDefaultsToVideo(t *testing.T) {
+	tests := []struct {
+		file, want string
+	}{
+		{"valid/default-langs.yaml", TypeVideo},
+		{"valid/screenshots-areas.yaml", TypeScreenshots},
+	}
+	for _, tt := range tests {
+		s, err := Parse(readSample(t, tt.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Kind(); got != tt.want {
+			t.Errorf("%s: Kind() = %q, want %q", tt.file, got, tt.want)
+		}
+	}
+	if got := (Script{Type: TypeVideo}).Kind(); got != TypeVideo {
+		t.Errorf("explicit video: Kind() = %q", got)
+	}
+}
+
+// The type rules the schema cannot express (decision 72). Each case is one
+// script, so a rule that stops firing shows by its pointer.
+func TestCheckType_rules(t *testing.T) {
+	shot := Step{Action: Screenshot{}}
+	click := Step{Action: Click{Selector: "#a"}}
+	narrated := Step{Action: Screenshot{}, Narration: map[string]string{"en": "x"}}
+	silent := Step{Action: Screenshot{}, Narration: map[string]string{}}
+	tests := []struct {
+		name string
+		s    Script
+		want failure.ValidationErrors
+	}{
+		{"video without shots", Script{Steps: []Step{click}}, nil},
+		{"video with a shot", Script{Steps: []Step{click, shot}},
+			failure.ValidationErrors{{Pointer: "/steps/1/screenshot", Message: "screenshot steps need type: screenshots"}}},
+		{"screenshots, plain", Script{Type: TypeScreenshots, Steps: []Step{click, shot}}, nil},
+		{"screenshots, no shot", Script{Type: TypeScreenshots, Steps: []Step{click}},
+			failure.ValidationErrors{{Pointer: "/steps", Message: "a screenshots script needs at least one screenshot step"}}},
+		{"screenshots, narrated step", Script{Type: TypeScreenshots, Steps: []Step{narrated}},
+			failure.ValidationErrors{{Pointer: "/steps/0/narration", Message: "narration is not allowed in a screenshots script"}}},
+		{"screenshots, empty narration object", Script{Type: TypeScreenshots, Steps: []Step{silent}},
+			failure.ValidationErrors{{Pointer: "/steps/0/narration", Message: "narration is not allowed in a screenshots script"}}},
+		{"screenshots, every video field", Script{
+			Type: TypeScreenshots, Steps: []Step{shot},
+			Languages: []string{"en"}, Voices: map[string]string{"en": "v"}, Intro: &Bookend{Off: true}, Outro: &Bookend{},
+		}, failure.ValidationErrors{
+			{Pointer: "/languages", Message: "languages is not allowed in a screenshots script"},
+			{Pointer: "/voices", Message: "voices is not allowed in a screenshots script"},
+			{Pointer: "/intro", Message: "intro is not allowed in a screenshots script"},
+			{Pointer: "/outro", Message: "outro is not allowed in a screenshots script"},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := checkType(tt.s); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("checkType() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStep_screenshotJSONRoundTrip(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     Step
+		wantJSON string
+	}{
+		{"viewport", Step{Action: Screenshot{}}, `{"screenshot":true}`},
+		{"full page", Step{Action: Screenshot{FullPage: true}}, `{"screenshot":{"fullPage":true}}`},
+		{"element", Step{Action: Screenshot{Selector: "#e"}}, `{"screenshot":{"selector":"#e"}}`},
+		{"clip", Step{Action: Screenshot{Clip: &Clip{X: 1, Y: 2, Width: 3, Height: 4}}},
+			`{"screenshot":{"clip":{"x":1,"y":2,"width":3,"height":4}}}`},
+		{"annotated", Step{Action: Screenshot{Annotate: &Annotate{Selector: "#b", Box: true, Label: "L"}}},
+			`{"screenshot":{"annotate":{"selector":"#b","box":true,"label":"L"}}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.step)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != tt.wantJSON {
+				t.Errorf("json = %s, want %s", data, tt.wantJSON)
+			}
+			var back Step
+			if err := json.Unmarshal(data, &back); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(back, tt.step) {
+				t.Errorf("round trip = %+v, want %+v", back, tt.step)
+			}
+		})
+	}
+}
+
+// explore_page has no files to write, so a screenshot step in its actions is
+// refused by Parse, before the executor's "unknown action".
+func TestParseSteps_rejectsScreenshot(t *testing.T) {
+	_, err := ParseSteps([]json.RawMessage{json.RawMessage(`{"goto": "/"}`), json.RawMessage(`{"screenshot": true}`)})
+	var ve failure.ValidationErrors
+	if !errors.As(err, &ve) || len(ve) != 1 || ve[0].Pointer != "/steps/1/screenshot" {
+		t.Errorf("ParseSteps() error = %v, want one error at /steps/1/screenshot", err)
+	}
+}
+
+func TestExampleScreenshotsYAML_isValid(t *testing.T) {
+	s, err := Parse(ExampleScreenshotsYAML())
+	if err != nil {
+		t.Fatalf("example screenshots script does not validate: %v", err)
+	}
+	if s.Kind() != TypeScreenshots {
+		t.Errorf("Kind() = %q, want %q", s.Kind(), TypeScreenshots)
 	}
 }

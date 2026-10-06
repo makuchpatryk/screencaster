@@ -20,6 +20,7 @@ import (
 	"screencaster/internal/app/explorer"
 	"screencaster/internal/app/renderer"
 	"screencaster/internal/domain/recorder"
+	"screencaster/internal/domain/shooter"
 )
 
 // Tool names; ffmpeg and ffprobe come from PATH.
@@ -61,6 +62,7 @@ func NewDeps(eng tts.Engine, runID func() string) (renderer.Deps, error) {
 		Rec:    recorderPort{rec: recorder.New(launchRecording)},
 		Asm:    assemblerPort{ffmpeg: assembler.FFmpeg{Bin: ffmpegBin, Probe: ffprobeBin}},
 		Cards:  cardsPort{},
+		Shots:  shooterPort{sh: shooter.Shooter{Launch: launchShots}},
 		Files:  osfs.FS{},
 		Voices: catalog,
 		Now:    time.Now,
@@ -87,6 +89,16 @@ func launchRecording(ctx context.Context, o recorder.LaunchOptions) (recorder.Se
 	})
 	if err != nil {
 		return nil, err // not `return s, err`: a nil *Session would be a non-nil Session
+	}
+	return s, nil
+}
+
+// launchShots opens an unrecorded session with no cursor overlay: a screenshots
+// run has no video to show one in (decision 75).
+func launchShots(ctx context.Context, o shooter.LaunchOptions) (shooter.Session, error) {
+	s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
+	if err != nil {
+		return nil, err
 	}
 	return s, nil
 }

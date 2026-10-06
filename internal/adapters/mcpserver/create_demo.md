@@ -17,3 +17,4 @@ Follow these steps in order:
 5. Call `render_video` with the script path, then poll `get_render_status` until the job is `succeeded` or `failed`. Report the output paths. If it failed, fix only the failing step in the YAML and submit again.
 6. Do not ask the developer to approve the YAML before rendering; they review the video, not the script.
 7. If the description above is empty, first ask the developer what the demo should show, then continue with step 1.
+8. If the developer wants screenshots of the app instead of a video, write a script with `type: screenshots` (no narration, languages, voices or cards; `screenshot` steps mark each capture) and queue it with `take_screenshots`; the PNGs land in `demos/output/<name>/screenshots/`.
