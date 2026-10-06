@@ -28,7 +28,7 @@ flowchart LR
         CLI[screencaster CLI]
         Core[[core library]]
         Chromium[(Chromium)]
-        Piper[Piper + voices]
+        TTS[TTS provider<br/>Piper + voices]
         FF[ffmpeg / ffprobe]
     end
     App[Target app<br/>host:3000]
@@ -39,7 +39,7 @@ flowchart LR
     MCP --> Core
     CLI --> Core
     Core --> Chromium
-    Core --> Piper
+    Core --> TTS
     Core --> FF
     Chromium -- host.docker.internal --> App
 ```
@@ -53,8 +53,11 @@ Go workspace (`go.work`, committed), four modules.
 ```
 core/                      library, no MCP, no SQLite
   script/                  types, embedded JSON Schema, cross-field rules   FR-001, FR-002
-  voices/                  discover installed voices, resolve per language  BR-011, FR-018
-  tts/                     Piper wrapper, WAV duration                      FR-003
+  voices/                  resolve a voice per language over a provider's catalog  BR-011, FR-018
+  provider/                TTS Engine contract + FromEnv (picks the adapter)  FR-003
+    piper/                 the only Piper-aware code: binary, .onnx voices, built-in voices
+  support/                 small helpers shared by adapters, no domain rules
+    wav/                   PCM WAV duration, used by every TTS adapter    FR-003
   browser/                 playwright-go wrapper: launch, context, screenshots   FR-004
   card/                    built-in start/end card page                     FR-009
   executor/                step execution (two modes)                       FR-005, FR-006
@@ -78,7 +81,7 @@ The JSON Schema sits next to the code that embeds it (`core/script`), because `g
 
 - `cli` → `core`, `mcp` → `core`. Never the reverse; `cli` never imports `mcp`.
 - `core` imports neither SQLite nor the MCP SDK.
-- Only `core/tts`, `core/assembler` and `core/browser` start subprocesses or call playwright-go. Everything else uses them through interfaces.
+- Only `core/provider/piper`, `core/assembler` and `core/browser` start subprocesses or call playwright-go. Everything else uses them through interfaces.
 - `core/renderer` reaches the browser, TTS and ffmpeg through small interfaces declared by the consumer (`Recorder`, `Synthesizer`, `Assembler`, `Cards`). Unit tests use fakes; only e2e uses the real tools.
 - Enforced by `depguard` in `.golangci.yml`.
 
@@ -91,7 +94,7 @@ sequenceDiagram
     participant C as Caller (CLI / worker)
     participant R as renderer
     participant V as script+voices
-    participant T as tts (Piper)
+    participant T as provider (Piper)
     participant B as recorder + executor (Chromium)
     participant A as assembler (ffmpeg)
     participant FS as outputDir
@@ -215,7 +218,7 @@ type Failure struct {
 |------|-------------|-----|-----|
 | Validation (list of `{pointer, message}`) | script, voices, renderer | print, exit 1 | tool error, no job created |
 | Step | executor | print, exit 1 | `jobs.error_json` |
-| TTS, Assembly, Cards | tts, assembler, renderer | print, exit 1 | `error_json.message` |
+| TTS, Assembly, Cards | provider, assembler, renderer | print, exit 1 | `error_json.message` |
 | Interrupted | startup recovery | n/a | `error_json` |
 
 Step, TTS, assembly and card failures become a `Failure` before they leave `core`. Messages name the step or phase and the language, and include the tool's stderr tail where there is one.
@@ -246,7 +249,7 @@ stateDiagram-v2
 ├── demos/*.yaml               scripts: baseUrl, optional storageState and outputDir (FR-001)
 ├── demos/assets/*             card pictures named by intro.image / outro.image
 ├── demos/output/              <name>.<lang>.<ts>.mp4, never overwritten
-├── voices/*.onnx(+.json)      extra Piper voices (FR-016)
+├── voices/*                   extra voices for the active TTS provider (Piper: *.onnx + .json, FR-016)
 └── .screencaster/
     ├── jobs.db                MCP only
     ├── render.lock
@@ -260,8 +263,9 @@ stateDiagram-v2
 
 ## 12. Docker image
 
-- One multi-stage image: `piper` (Piper + voices), `dev` (toolchain for `make`), `build` (static binaries), `runtime` (last, so `docker build .` yields it). The runtime holds both binaries, Chromium, ffmpeg, Piper and the built-in voices. Piper and the voices are checksum-pinned.
-- Voice discovery scans the image's voice folder and `/work/voices`; the language is the voice name up to the first `_` (FR-018).
+- One multi-stage image: `piper` (Piper + voices), `dev` (toolchain for `make`, with the Piper provider env), `build` (static binaries), `runtime-base` (both binaries, Chromium, ffmpeg, no TTS) and `runtime-piper` (base + Piper and the built-in voices; last, so `docker build .` yields it). Tags: `screencaster:piper` and `screencaster` (latest); `make image-base` tags `screencaster-base`. Piper and the voices are checksum-pinned.
+- **Provider selection.** The image sets `SCREENCASTER_TTS` (and the provider's own variables: `SCREENCASTER_PIPER_BIN`, `SCREENCASTER_PIPER_VOICES`). `screencaster-mcp` calls `provider.FromEnv` at startup; the CLI calls it when a render starts, so `--help` and `version` work without a provider. Either way it fails with a clear message, before any render work, when the name is unset or unknown or the Piper binary is missing. No image path lives in Go code.
+- Voice discovery belongs to the provider. The Piper adapter scans the image's voice folder and `/work/voices` on every call; the language is the voice name up to the first `_` (FR-018).
 - `--add-host=host.docker.internal:host-gateway` lets a `baseUrl` reach the host app on Linux (Decision 27). The container runs as root, so output files are root-owned.
 - **Stdio hygiene.** MCP uses stdout for protocol frames, so all logging goes to stderr and subprocess output (Piper, ffmpeg, the Playwright driver) is captured, never inherited. A stray byte on stdout corrupts the session.
 - Go tooling runs in the dev image (Decision 52); `make image-check` verifies the built-in voices are in the image.
@@ -288,11 +292,11 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 - **Slides / overlays** (PRD §10.2): only start and end cards exist (Decision 63). Interleaved slides would change the recorder output and the assembler; overlays would hook in as an executor init script, like the cursor.
 - **New languages:** no code change, add the voice files under `/work/voices`.
-- **Other TTS engines:** behind `Synthesizer`; out of scope now.
+- **Other TTS engines:** one adapter package `core/provider/<name>` that satisfies `provider.Engine` (`Catalog`, and `Synthesize` into a PCM WAV), one case in `provider.FromEnv`, and an image layer: a `runtime-<name>` stage (local binary: fetch stage + ENV; cloud or sidecar: `FROM runtime-base` + ENV only). Script voice IDs are opaque per provider, so a switch may need `voices:` edits. A network provider must revisit NFR-003 and BR-001 first. Piper is the only adapter today.
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–64 are also in the PRD log; 56, 57 and 61 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–64 are also in the PRD log; 56, 57, 61 and 65 are only here.
 
 | # | Decision | Why |
 |---|----------|-----|
@@ -317,11 +321,12 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–
 | 62 | Demo paths resolve against the demo's folder and must stay inside the working directory. Supersedes the rejection in 58 | A demo, its videos and its pictures move together. |
 | 63 | Every video gets a start and end card unless `false`; built-in cards are an embedded HTML page screenshotted by Chromium, a custom `image` is used as is; the assembler joins them with `concat` and shifts clip offsets by the intro | Chromium wraps text and has the Polish glyphs. Recorded cards would meet the bimodal start (§17.1). |
 | 64 | Render log lines come from `renderer` through `Request.Log`; the caller chooses stderr or `slog` | One place for the wording; nothing on stdout. |
+| 65 | The TTS provider sits behind `provider.Engine`, chosen by `SCREENCASTER_TTS` at startup; the image is `runtime-base` plus one provider layer | A new provider is one adapter, one `FromEnv` case and one image layer. Piper details stay in `core/provider/piper`; the image owns the provider and its paths. |
 
 ## 17. Open items for spikes
 
 1. **Lead-in (Decision 46).** The first recorded frame comes about 90 ms after page creation, so offsets are shifted by `recorder.LeadInCompensation` (residual about ±40 ms). **The start is bimodal:** in about a third of recordings the first page's frames are missing and video time 0 is about 0.5 s after `t0`, so narration plays late. Open: measure the lead-in per recording. Guarded by `TestRecord_leadInIsWithinTolerance` and the e2e drift check.
 2. **Strict locators.** playwright-go locators are strict by default; an ambiguous selector fails fast with the candidates, so the executor needs no pre-check. Guarded by `TestBrowser_ambiguousSelectorFailsFast`.
-3. **Piper (Decision 49).** `piper --model <voice>.onnx --output_file <out.wav>` with the text on stdin; the output is PCM s16le mono and the header duration matches ffprobe. Piper prints the output path on stdout, so stdout must not be inherited. Guarded by `TestParseWAV_durationFromHeader`.
+3. **Piper (Decision 49).** `piper --model <voice>.onnx --output_file <out.wav>` with the text on stdin; the output is PCM s16le mono and the header duration matches ffprobe. Piper prints the output path on stdout, so stdout must not be inherited. Guarded by `TestParse_durationFromHeader` in `core/support/wav`.
 4. **ARIA snapshot (Decision 47).** `Locator("body").AriaSnapshot()` gives one `- role "name" [attrs]: value` line per node, indented by nesting; a regexp over the leading role and name is enough to derive selectors. The `role=` selector matches the whole name, so uniqueness checks and `>> nth=` are only needed for repeated names. Guarded by the explore e2e tests and the mapper unit tests.
 5. **Cards (Decision 63).** The built-in card renders the Polish letters (`TestScreenshot_polishGlyphsAreDistinct`), and looped stills joined with `concat` end at the sum of the parts with audio still in sync.
