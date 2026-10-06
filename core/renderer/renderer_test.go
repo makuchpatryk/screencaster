@@ -43,9 +43,15 @@ steps:
 `
 )
 
-var stock = voices.Installed{
-	"en_US-ryan-high":      "/v/en_US-ryan-high.onnx",
-	"pl_PL-darkman-medium": "/v/pl_PL-darkman-medium.onnx",
+// defaults stand in for a provider's built-in voices; the renderer only sees names.
+var defaults = map[string]string{"en": "en_US-ryan-high", "pl": "pl_PL-darkman-medium"}
+
+var stock = voices.Catalog{
+	Voices: []voices.Voice{
+		{Name: "en_US-ryan-high", Lang: "en"},
+		{Name: "pl_PL-darkman-medium", Lang: "pl"},
+	},
+	Defaults: defaults,
 }
 
 // workDir builds a project holding demos/demo.yaml (when script != "").
@@ -110,7 +116,7 @@ func TestPrepare_usesBuiltInVoicePerLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"en": "/v/en_US-ryan-high.onnx", "pl": "/v/pl_PL-darkman-medium.onnx"}
+	want := map[string]string{"en": "en_US-ryan-high", "pl": "pl_PL-darkman-medium"}
 	if !reflect.DeepEqual(plan.Voices, want) {
 		t.Errorf("Voices = %v, want %v", plan.Voices, want)
 	}
@@ -145,19 +151,19 @@ func TestPrepare_failsBeforeAnyWork(t *testing.T) {
 		name     string
 		script   string
 		override []string
-		inst     voices.Installed
+		cat      voices.Catalog
 		want     func(dir string) string
 	}{
 		{
 			name:   "baseUrl required (FR-001 AC1)",
 			script: "name: demo\nsteps:\n  - action: goto\n    url: /\n",
-			inst:   stock,
+			cat:    stock,
 			want:   func(string) string { return "missing property 'baseUrl'" },
 		},
 		{
 			name:   "baseUrl must be absolute",
 			script: "name: demo\nbaseUrl: /app\nsteps:\n  - action: goto\n    url: /\n",
-			inst:   stock,
+			cat:    stock,
 			want:   func(string) string { return "/baseUrl: baseUrl must be an absolute http or https URL: /app" },
 		},
 		{
@@ -167,26 +173,26 @@ func TestPrepare_failsBeforeAnyWork(t *testing.T) {
 		{
 			name:   "narration missing for a selected language points at the step (FR-002 AC1)",
 			script: enPlMissingPl,
-			inst:   stock,
+			cat:    stock,
 			want:   func(string) string { return "/steps/0/narration: missing narration for language pl" },
 		},
 		{
 			name:     "override can select a language the script has no narration for",
 			script:   enOnly,
 			override: []string{"en", "pl"},
-			inst:     stock,
+			cat:      stock,
 			want:     func(string) string { return "/steps/0/narration: missing narration for language pl" },
 		},
 		{
 			name:   "voice not installed (BR-011)",
 			script: enOnly,
-			inst:   voices.Installed{},
+			cat:    voices.Catalog{Defaults: defaults},
 			want:   func(string) string { return "voice not installed: en_US-ryan-high" },
 		},
 		{
 			name:   "narration and voice problems are reported together",
 			script: enPlMissingPl,
-			inst:   voices.Installed{"en_US-ryan-high": "/v/en.onnx"},
+			cat:    voices.Catalog{Voices: []voices.Voice{{Name: "en_US-ryan-high", Lang: "en"}}, Defaults: defaults},
 			want: func(string) string {
 				return "/steps/0/narration: missing narration for language pl\nvoice not installed: pl_PL-darkman-medium"
 			},
@@ -195,7 +201,7 @@ func TestPrepare_failsBeforeAnyWork(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := workDir(t, tt.script)
-			_, err := Prepare(Request{WorkDir: dir, ScriptPath: "demos/demo.yaml", LangOverride: tt.override}, tt.inst)
+			_, err := Prepare(Request{WorkDir: dir, ScriptPath: "demos/demo.yaml", LangOverride: tt.override}, tt.cat)
 			if err == nil {
 				t.Fatal("Prepare() error = nil")
 			}
@@ -342,7 +348,7 @@ func TestPrepare_ignoresScreencasterYAML(t *testing.T) {
 		t.Fatal(err)
 	}
 	if plan.Script.BaseURL != "http://host.docker.internal:3000" || plan.Script.StorageState != nil ||
-		plan.OutputDir != filepath.Join(dir, "demos", "output") || plan.Voices["en"] != "/v/en_US-ryan-high.onnx" {
+		plan.OutputDir != filepath.Join(dir, "demos", "output") || plan.Voices["en"] != "en_US-ryan-high" {
 		t.Errorf("a stray screencaster.yaml changed the plan: %+v", plan)
 	}
 }

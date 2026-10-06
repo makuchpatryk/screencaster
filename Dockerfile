@@ -1,5 +1,15 @@
-# Stages: piper (shared) -> dev -> build -> runtime. `docker build .` yields the
-# runtime image; `make dev-image` targets dev.
+# Stages: piper -> dev -> build -> runtime-base -> runtime-piper. `docker build .`
+# yields the last one, the Piper image users run; `make dev-image` targets dev,
+# `make image-base` targets runtime-base (Chromium, ffmpeg, binaries, no TTS).
+#
+# TTS providers (ARCHITECTURE §15): the binaries pick one at startup from
+# SCREENCASTER_TTS and exit when it is unset or unknown, so every image that
+# runs them names its provider. To add one:
+#   - local binary: a stage that fetches it, then `runtime-<name>` = FROM
+#     runtime-base + COPY + the ENV lines its adapter reads;
+#   - cloud API or sidecar: `runtime-<name>` = FROM runtime-base + ENV only
+#     (it breaks NFR-003 offline and needs a BR-001 determinism review).
+# No provider path lives in Go code; the ENV lines below are the only place.
 # dev grows with the milestones: Chromium + ffmpeg (M2), Piper + voices (M3).
 
 # piper: the archived C++ release and the two built-in voices (BR-011), shared
@@ -60,8 +70,12 @@ RUN GOCACHE=/tmp/gocache GOMODCACHE=/tmp/gomod GOBIN=/usr/local/bin \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-# Piper and the voices (see the piper stage).
+# Piper and the voices (see the piper stage); the same provider settings as
+# runtime-piper, so tests and the shipped image resolve voices the same way.
 COPY --from=piper /opt/piper /opt/piper
+ENV SCREENCASTER_TTS=piper \
+    SCREENCASTER_PIPER_BIN=/opt/piper/piper \
+    SCREENCASTER_PIPER_VOICES=/opt/piper/voices
 # World-writable so a named volume mounted here is usable by `--user $(id -u)`.
 RUN mkdir -m 777 /cache
 ENV GOPATH=/cache/go \
@@ -87,9 +101,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     && (cd mcp && CGO_ENABLED=0 go build -trimpath -o /out/screencaster-mcp .) \
     && (cd core && go build -o /out/playwright github.com/mxschmitt/playwright-go/cmd/playwright)
 
-# runtime: what users run (FR-016). Runs as root with the project mounted at
-# /work. Use `docker run --init` so SIGTERM reaches the process (ARCHITECTURE §6.4).
-FROM debian:bookworm-slim AS runtime
+# runtime-base: everything but a TTS provider. Runs as root with the project
+# mounted at /work. Use `docker run --init` so SIGTERM reaches the process
+# (ARCHITECTURE §6.4). Without SCREENCASTER_TTS the binaries refuse to start.
+FROM debian:bookworm-slim AS runtime-base
 ENV PLAYWRIGHT_DRIVER_PATH=/opt/playwright-driver \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     HOME=/tmp
@@ -99,6 +114,12 @@ RUN apt-get update \
     && playwright install --with-deps chromium \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* /usr/local/bin/playwright
-COPY --from=piper /opt/piper /opt/piper
 COPY --from=build /out/screencaster /out/screencaster-mcp /usr/local/bin/
 WORKDIR /work
+
+# runtime-piper: what users run (FR-016). Last stage, so `docker build .` yields it.
+FROM runtime-base AS runtime-piper
+COPY --from=piper /opt/piper /opt/piper
+ENV SCREENCASTER_TTS=piper \
+    SCREENCASTER_PIPER_BIN=/opt/piper/piper \
+    SCREENCASTER_PIPER_VOICES=/opt/piper/voices

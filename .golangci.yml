@@ -25,10 +25,10 @@ linters:
             - pkg: screencaster/mcp
               desc: core must not import its entry points
         core-exec-only-in-wrappers:
-          files: ["**/core/**", "!**/core/tts/**", "!**/core/assembler/**", "!**/core/browser/**"]
+          files: ["**/core/**", "!**/core/provider/piper/**", "!**/core/assembler/**", "!**/core/browser/**"]
           deny:
             - pkg: os/exec
-              desc: only core/tts, core/assembler and core/browser spawn processes
+              desc: only core/provider/piper, core/assembler and core/browser spawn processes
         core-playwright-only-in-browser:
           files: ["**/core/**", "!**/core/browser/**"]
           deny:

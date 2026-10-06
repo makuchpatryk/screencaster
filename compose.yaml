@@ -1,10 +1,10 @@
 # Run: docker compose run --rm screencaster render demos/my-demo.yaml
 services:
   screencaster:
-    image: screencaster
+    image: screencaster:piper
     build:
       context: .
-      target: runtime
+      target: runtime-piper
     entrypoint: ["screencaster"]
     # Forwards SIGTERM so a stopped render cleans up.
     init: true

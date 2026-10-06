@@ -51,7 +51,7 @@ func Step(i int, lang, action, target string, err error) *Failure {
 	return &Failure{Step: &i, Lang: lang, Action: action, Target: target, Message: err.Error(), cause: err}
 }
 
-// TTS reports that Piper failed for the narration of step i.
+// TTS reports that the TTS provider failed for the narration of step i.
 func TTS(i int, lang, stderr string) *Failure {
 	return &Failure{Step: &i, Lang: lang, Message: fmt.Sprintf("tts failed at step %d (%s): %s", i, lang, stderr)}
 }

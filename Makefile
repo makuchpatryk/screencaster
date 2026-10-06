@@ -14,22 +14,29 @@ E2E_RUN := docker run --rm --user $(shell id -u):$(shell id -g) --shm-size=1g \
 # Runs $(1) in every module directory, stops at the first failure.
 in_modules = $(DEV_RUN) sh -c 'for m in $(MODULES); do (cd $$m && $(1)) || exit 1; done'
 
-.PHONY: dev-image image image-check test vet lint e2e e2e-runtime
+.PHONY: dev-image image image-base image-check test vet lint e2e e2e-runtime
 
 dev-image:
 	docker build --target dev -t $(DEV_IMAGE) .
 
-# The runtime image users run (FR-016). Stage order puts it last, so a plain
-# `docker build .` gives the same result.
+# The Piper runtime image users run (FR-016), tagged :piper and latest. Stage
+# order puts runtime-piper last, so a plain `docker build .` gives the same result.
 image:
-	docker build --target runtime -t $(IMAGE) .
+	docker build --target runtime-piper -t $(IMAGE):piper -t $(IMAGE) .
 
-# The built-in voice names come from core/voices, so the image and the code
-# cannot drift apart (CODE_QUALITY DRY). The runtime image has no Go, hence shell.
+# The provider-free base: Chromium, ffmpeg and the binaries, no TTS. The base for
+# any other provider's image (Dockerfile header).
+image-base:
+	docker build --target runtime-base -t $(IMAGE)-base .
+
+# The built-in voice names come from the Piper adapter, so the image and the code
+# cannot drift apart (CODE_QUALITY DRY). The voice folder is the image's own
+# SCREENCASTER_PIPER_VOICES, so its path lives only in the Dockerfile. The
+# runtime image has no Go, hence shell.
 image-check:
-	@want=$$(sed -n '/^var builtin/,/^}/s/.*: *"\(.*\)",/\1/p' core/voices/voices.go); \
-	test -n "$$want" || { echo "no built-in voices found in core/voices"; exit 1; }; \
-	have=$$(docker run --rm $(IMAGE) ls /opt/piper/voices); \
+	@want=$$(sed -n '/^var Defaults/,/^}/s/.*: *"\(.*\)",/\1/p' core/provider/piper/piper.go); \
+	test -n "$$want" || { echo "no built-in voices found in core/provider/piper"; exit 1; }; \
+	have=$$(docker run --rm $(IMAGE) sh -c 'ls "$$SCREENCASTER_PIPER_VOICES"'); \
 	for v in $$want; do \
 	  for ext in onnx onnx.json; do \
 	    echo "$$have" | grep -qx "$$v.$$ext" || { echo "missing in image: $$v.$$ext"; exit 1; }; \

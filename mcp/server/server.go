@@ -40,8 +40,8 @@ type Deps struct {
 	Store    *queue.Store
 	Worker   *queue.Worker
 	Explorer explorer.Explorer
-	// Voices lists the installed Piper voices.
-	Voices func() (voices.Installed, error)
+	// Voices lists the active TTS provider's voices.
+	Voices func() (voices.Catalog, error)
 	// NewID returns a fresh job ID (UUID v4).
 	NewID func() string
 }
@@ -221,12 +221,12 @@ type optionsOut struct {
 }
 
 func (h handlers) options(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, optionsOut, error) {
-	installed, err := h.Voices()
+	catalog, err := h.Voices()
 	if err != nil {
 		return nil, optionsOut{}, err
 	}
 	langs := []languageOut{}
-	for _, o := range voices.Options(installed) {
+	for _, o := range voices.Options(catalog) {
 		l := languageOut{Code: o.Code, SelectedByDefault: o.SelectedByDefault, Voices: o.Voices}
 		if o.DefaultVoice != "" {
 			l.DefaultVoice = &o.DefaultVoice

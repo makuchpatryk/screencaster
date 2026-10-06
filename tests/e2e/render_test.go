@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"screencaster/core/tts"
+	"screencaster/core/provider"
 )
 
 // markerText is the narration of the drift probe step. It starts with a
@@ -381,8 +381,13 @@ const defaultCard = 3 * time.Second
 func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
 	t.Helper()
 	clip := filepath.Join(t.TempDir(), "marker.wav")
-	if _, err := (tts.Piper{Bin: "/opt/piper/piper"}).Synthesize(context.Background(),
-		"/opt/piper/voices/en_US-ryan-high.onnx", markerText, clip); err != nil {
+	// The image's environment names the provider; the built-in voice needs no
+	// project voices, so any folder serves as the work dir.
+	eng, err := provider.FromEnv(os.Getenv, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Synthesize(context.Background(), "en_US-ryan-high", markerText, clip); err != nil {
 		t.Fatal(err)
 	}
 	lead := leadSilence(t, clip)

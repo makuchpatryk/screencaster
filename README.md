@@ -14,15 +14,16 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
    go build -o screencaster-mcp ./mcp
    ```
 
-2. **Docker** (recommended; one image holds both binaries, Chromium, Piper, both voices and ffmpeg):
+2. **Docker** (recommended; one image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg):
    ```bash
-   docker compose build    # or: make image
+   docker compose build    # or: make image (tags screencaster:piper and screencaster)
    docker compose run --rm screencaster render demos/my-demo.yaml
    ```
    - `compose.yaml` sets `--init` (forwards SIGTERM, so a stopped render cleans up), `--shm-size=1g`, the `host.docker.internal` host mapping and the `.:/work` mount.
    - The host mapping lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
    - Plain Docker works too: `docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml`.
    - The container runs as root: the rendered files belong to root.
+   - The TTS provider comes from the image's environment: the Piper image sets `SCREENCASTER_TTS=piper` plus `SCREENCASTER_PIPER_BIN` and `SCREENCASTER_PIPER_VOICES`. Both binaries exit at startup when `SCREENCASTER_TTS` is unset or unknown, so a hand-built image must set it. `make image-base` builds the same image without any provider.
    - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
 
 3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. Every path in a demo (`outputDir`, an intro or outro `image`) is relative to the demo file's folder and must stay inside the working directory (`/work` in Docker):
@@ -93,8 +94,9 @@ make lint        # golangci-lint (incl. import-boundary rules) in every module
 ```
 
 ```bash
-make image         # build the runtime image
-make image-check   # built-in voices from core/voices are present in it
+make image         # build the Piper runtime image (screencaster:piper, screencaster)
+make image-base    # the provider-free base (screencaster-base)
+make image-check   # built-in voices from the Piper adapter are present in it
 make e2e           # real Chromium, Piper, ffmpeg in the dev image
 make e2e-runtime   # the CLI tests against the runtime image
 ```
@@ -116,7 +118,7 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 
 ## Notes
 
-- Add extra Piper voices to `/work/voices/*.onnx` (FR-018)
+- Add extra voices for the active TTS provider to `/work/voices` (Piper: `*.onnx` plus `*.onnx.json`, FR-018). Voice names are the provider's own, so switching provider may need `voices:` edits in a script
 - Add `.screencaster/` to the `.gitignore` of the project you render (render lock, job DB, temp files)
 
 ## Claude Code (MCP)

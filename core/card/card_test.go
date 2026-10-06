@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"screencaster/core/voices"
+	"screencaster/core/provider/piper"
+	"screencaster/core/script"
 )
 
 func TestHTML_escapesText(t *testing.T) {
@@ -67,14 +68,15 @@ func TestOutro(t *testing.T) {
 }
 
 func TestOutro_coversBuiltInVoiceLanguages(t *testing.T) { // BR-011
-	// With nothing installed, Options lists exactly the built-in languages.
-	opts := voices.Options(voices.Installed{})
-	if len(opts) == 0 {
-		t.Fatal("no built-in languages listed")
+	// The built-in languages are the selected-by-default ones plus whatever the
+	// provider ships a voice for.
+	langs := script.Languages(nil, nil)
+	for lang := range piper.Defaults {
+		langs = append(langs, lang)
 	}
-	for _, o := range opts {
-		if outro[o.Code] == "" {
-			t.Errorf("no closing line for built-in language %q", o.Code)
+	for _, lang := range langs {
+		if outro[lang] == "" {
+			t.Errorf("no closing line for built-in language %q", lang)
 		}
 	}
 }

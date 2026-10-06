@@ -91,7 +91,7 @@ func (f *fakes) Screenshot(_ context.Context, shots []Shot) error {
 }
 
 func (f *fakes) Synthesize(_ context.Context, voice, text, out string) (time.Duration, error) {
-	f.log = append(f.log, fmt.Sprintf("tts %s %s", filepath.Base(voice), filepath.Base(out)))
+	f.log = append(f.log, fmt.Sprintf("tts %s %s", voice, filepath.Base(out)))
 	f.advance(500 * time.Millisecond)
 	if f.ttsErr != nil {
 		return 0, f.ttsErr
@@ -187,8 +187,8 @@ func TestRender_ttsRunsBeforeRecordingPerLanguage(t *testing.T) { // FR-003, FR-
 		t.Fatal(err)
 	}
 	want := []string{
-		"tts en_US-ryan-high.onnx 1.wav", "tts en_US-ryan-high.onnx 3.wav", "cards intro.png,outro.png", "record en", "assemble en",
-		"tts pl_PL-darkman-medium.onnx 1.wav", "tts pl_PL-darkman-medium.onnx 3.wav", "cards intro.png,outro.png", "record pl", "assemble pl",
+		"tts en_US-ryan-high 1.wav", "tts en_US-ryan-high 3.wav", "cards intro.png,outro.png", "record en", "assemble en",
+		"tts pl_PL-darkman-medium 1.wav", "tts pl_PL-darkman-medium 3.wav", "cards intro.png,outro.png", "record pl", "assemble pl",
 	}
 	if !reflect.DeepEqual(f.log, want) {
 		t.Errorf("calls =\n%q\nwant\n%q", f.log, want)

@@ -20,10 +20,9 @@ import (
 	"screencaster/core/browser"
 	"screencaster/core/explorer"
 	"screencaster/core/lock"
+	"screencaster/core/provider"
 	"screencaster/core/recorder"
 	"screencaster/core/renderer"
-	"screencaster/core/tts"
-	"screencaster/core/voices"
 	"screencaster/mcp/queue"
 	"screencaster/mcp/server"
 )
@@ -31,12 +30,9 @@ import (
 // version is reported to MCP clients.
 const version = "0.1.0"
 
-// Tool locations in the image layout (Dockerfile). ffmpeg and ffprobe come
-// from PATH.
+// Tool names; ffmpeg and ffprobe come from PATH. The TTS provider and its paths
+// come from the image's environment (provider.FromEnv).
 const (
-	piperBin      = "/opt/piper/piper"
-	builtinVoices = "/opt/piper/voices"
-	projectVoices = "voices" // relative to the work dir: /work/voices in the image
 	ffmpegBin     = "ffmpeg"
 	ffprobeBin    = "ffprobe"
 	stateDir      = ".screencaster"
@@ -55,6 +51,12 @@ func main() {
 
 func run() error {
 	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	// Fail before opening the store or accepting any call when the image names
+	// no usable TTS provider.
+	eng, err := provider.FromEnv(os.Getenv, wd)
 	if err != nil {
 		return err
 	}
@@ -83,15 +85,12 @@ func run() error {
 		return err
 	}
 
-	discover := func() (voices.Installed, error) {
-		return voices.Discover(builtinVoices, filepath.Join(wd, projectVoices))
-	}
 	worker := queue.NewWorker(store)
 	workerCtx, cancelWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
-		worker.Run(workerCtx, renderJob(wd, discover), acquireLock(filepath.Join(state, lockFile)))
+		worker.Run(workerCtx, renderJob(wd, eng), acquireLock(filepath.Join(state, lockFile)))
 	}()
 
 	srv := server.New(server.Deps{
@@ -99,7 +98,7 @@ func run() error {
 		Store:    store,
 		Worker:   worker,
 		Explorer: explorer.Explorer{Launch: launchExplorer},
-		Voices:   discover,
+		Voices:   eng.Catalog,
 		NewID:    uuid.NewString,
 	}, version)
 	err = srv.Run(ctx, &mcp.StdioTransport{})
@@ -113,7 +112,7 @@ func run() error {
 // The job's stored languages are the override, so a render uses the selection
 // made at submit time (BR-002), and the job ID names the temp dir
 // (ARCHITECTURE §11).
-func renderJob(wd string, discover func() (voices.Installed, error)) func(context.Context, queue.Job) ([]queue.Output, error) {
+func renderJob(wd string, eng provider.Engine) func(context.Context, queue.Job) ([]queue.Output, error) {
 	launch := func(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
 		s, err := browser.Launcher{}.Launch(ctx, browser.Options{
 			BaseURL:      o.BaseURL,
@@ -128,16 +127,16 @@ func renderJob(wd string, discover func() (voices.Installed, error)) func(contex
 		return s, nil
 	}
 	return func(ctx context.Context, job queue.Job) ([]queue.Output, error) {
-		installed, err := discover()
+		catalog, err := eng.Catalog()
 		if err != nil {
 			return nil, err
 		}
 		outs, err := renderer.Render(ctx, renderer.Deps{
-			TTS:    tts.Piper{Bin: piperBin},
+			TTS:    eng,
 			Rec:    recorder.New(launch),
 			Asm:    assembler.FFmpeg{Bin: ffmpegBin, Probe: ffprobeBin},
 			Cards:  cards{},
-			Voices: installed,
+			Voices: catalog,
 			Now:    time.Now,
 			RunID:  func() string { return job.ID },
 		}, renderer.Request{

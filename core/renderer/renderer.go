@@ -52,9 +52,10 @@ type Request struct {
 type Progress func(lang string, i, n int, action, target string)
 
 // Synthesizer turns text into a WAV at outPath and returns its duration
-// (core/tts).
+// (core/provider). voice is a name from the provider's catalog, opaque to the
+// renderer.
 type Synthesizer interface {
-	Synthesize(ctx context.Context, voicePath, text, outPath string) (time.Duration, error)
+	Synthesize(ctx context.Context, voice, text, outPath string) (time.Duration, error)
 }
 
 // Recorder records one language (core/recorder).
@@ -85,7 +86,7 @@ type Deps struct {
 	Rec    Recorder
 	Asm    Assembler
 	Cards  Cards
-	Voices voices.Installed
+	Voices voices.Catalog
 	Now    func() time.Time
 	RunID  func() string
 }
@@ -102,7 +103,7 @@ type Output struct {
 type Plan struct {
 	Script    script.Script
 	Languages []string
-	Voices    map[string]string // language -> .onnx path
+	Voices    map[string]string // language -> voice name
 	DemoDir   string            // absolute; every path in the demo resolves against it (decision 62)
 	OutputDir string            // absolute
 	Intro     Card
@@ -125,7 +126,7 @@ type Card struct {
 // images without starting any browser, TTS or ffmpeg work (FR-001, FR-002,
 // BR-011). Problems with the script, voices and paths come back together as
 // failure.ValidationErrors.
-func Prepare(req Request, installed voices.Installed) (Plan, error) {
+func Prepare(req Request, catalog voices.Catalog) (Plan, error) {
 	path := resolve(req.WorkDir, req.ScriptPath)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -142,7 +143,7 @@ func Prepare(req Request, installed voices.Installed) (Plan, error) {
 
 	langs := script.Languages(req.LangOverride, s.Languages)
 	errs := script.Validate(s, langs)
-	paths, voiceErrs := voices.Resolve(langs, s.Voices, installed)
+	chosen, voiceErrs := voices.Resolve(langs, s.Voices, catalog)
 	errs = append(errs, voiceErrs...)
 
 	// Paths in a demo resolve against the demo's folder, so a demo and its
@@ -172,7 +173,7 @@ func Prepare(req Request, installed voices.Installed) (Plan, error) {
 	return Plan{
 		Script:    s,
 		Languages: langs,
-		Voices:    paths,
+		Voices:    chosen,
 		DemoDir:   demoDir,
 		OutputDir: outputDir,
 		Intro:     intro,
@@ -363,7 +364,7 @@ func Render(ctx context.Context, d Deps, req Request) (_ []Output, err error) {
 func voiceNames(plan Plan) string {
 	names := make([]string, len(plan.Languages))
 	for i, lang := range plan.Languages {
-		names[i] = lang + "=" + strings.TrimSuffix(filepath.Base(plan.Voices[lang]), ".onnx")
+		names[i] = lang + "=" + plan.Voices[lang]
 	}
 	return strings.Join(names, ",")
 }

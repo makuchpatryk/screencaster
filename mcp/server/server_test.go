@@ -55,19 +55,27 @@ type env struct {
 	store  *queue.Store
 	worker *queue.Worker
 	cs     *mcp.ClientSession
-	inst   voices.Installed
+	cat    voices.Catalog
 	// launched records what the explorer's browser was opened with.
 	launched []explorer.LaunchOptions
 }
 
+// catalog is a provider catalog of the named voices with the en and pl
+// defaults; the language is the name up to the first "_".
+func catalog(names ...string) voices.Catalog {
+	c := voices.Catalog{Defaults: map[string]string{"en": "en_US-ryan-high", "pl": "pl_PL-darkman-medium"}}
+	for _, n := range names {
+		lang, _, _ := strings.Cut(n, "_")
+		c.Voices = append(c.Voices, voices.Voice{Name: n, Lang: lang})
+	}
+	return c
+}
+
 // newEnv starts the server over the in-memory transport with an empty project
-// dir. The returned inst can be changed before the first call that reads voices.
+// dir. The returned cat can be changed before the first call that reads voices.
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	e := &env{work: t.TempDir(), inst: voices.Installed{
-		"en_US-ryan-high":      "/v/en",
-		"pl_PL-darkman-medium": "/v/pl",
-	}}
+	e := &env{work: t.TempDir(), cat: catalog("en_US-ryan-high", "pl_PL-darkman-medium")}
 	var err error
 	e.store, err = queue.Open(filepath.Join(e.work, ".screencaster", "jobs.db"), time.Now)
 	if err != nil {
@@ -83,7 +91,7 @@ func newEnv(t *testing.T) *env {
 			e.launched = append(e.launched, o)
 			return fakePage{}, nil
 		}},
-		Voices: func() (voices.Installed, error) { return e.inst, nil },
+		Voices: func() (voices.Catalog, error) { return e.cat, nil },
 		NewID:  func() string { return "job-" + string(rune('a'+n.Add(1)-1)) },
 	}, "test")
 
@@ -365,20 +373,6 @@ func TestGetRenderStatus_unknownJob(t *testing.T) {
 
 // FR-018 acceptance criteria.
 func TestGetOptions(t *testing.T) {
-	voicesDir := func(t *testing.T, names ...string) voices.Installed {
-		t.Helper()
-		dir := t.TempDir()
-		for _, n := range names {
-			if err := os.WriteFile(filepath.Join(dir, n+".onnx"), nil, 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		inst, err := voices.Discover(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return inst
-	}
 	stock := []string{"en_US-ryan-high", "pl_PL-darkman-medium"}
 	find := func(o optionsOut, code string) languageOut {
 		for _, l := range o.Languages {
@@ -392,7 +386,7 @@ func TestGetOptions(t *testing.T) {
 
 	t.Run("stock image", func(t *testing.T) {
 		e := newEnv(t)
-		e.inst = voicesDir(t, stock...)
+		e.cat = catalog(stock...)
 		e.writeFile("demos/ok.yaml", validScript)
 		e.writeFile("demos/broken.yaml", "name: [")
 		o := decode[optionsOut](t, e.call(t, "get_options", map[string]any{}))
@@ -420,7 +414,7 @@ func TestGetOptions(t *testing.T) {
 
 	t.Run("extra voices", func(t *testing.T) {
 		e := newEnv(t)
-		e.inst = voicesDir(t, append(slices.Clone(stock), "pl_PL-gosia-medium", "de_DE-thorsten-medium")...)
+		e.cat = catalog(append(slices.Clone(stock), "pl_PL-gosia-medium", "de_DE-thorsten-medium")...)
 		o := decode[optionsOut](t, e.call(t, "get_options", map[string]any{}))
 		if pl := find(o, "pl"); !slices.Contains(pl.Voices, "pl_PL-gosia-medium") {
 			t.Errorf("pl voices = %v, want gosia listed", pl.Voices)
@@ -432,7 +426,7 @@ func TestGetOptions(t *testing.T) {
 
 	t.Run("no voices at all", func(t *testing.T) {
 		e := newEnv(t)
-		e.inst = voices.Installed{}
+		e.cat = catalog()
 		o := decode[optionsOut](t, e.call(t, "get_options", map[string]any{}))
 		if en := find(o, "en"); len(en.Voices) != 0 || en.DefaultVoice != nil {
 			t.Errorf("en = %+v, want empty voices", en)

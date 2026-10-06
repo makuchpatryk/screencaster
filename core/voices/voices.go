@@ -1,13 +1,9 @@
-// Package voices discovers installed Piper voices and resolves the voice for
-// each selected language (BR-011, FR-018).
+// Package voices resolves the voice for each selected language and lists the
+// languages on offer (BR-011, FR-018). It works on a provider's Catalog and
+// does no I/O; finding the voices is the provider's job (core/provider).
 package voices
 
 import (
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -15,74 +11,45 @@ import (
 	"screencaster/core/script"
 )
 
-const modelExt = ".onnx"
-
-// builtin holds the only languages with a default voice (BR-011). Names must
-// match the files baked into the image.
-var builtin = map[string]string{
-	"en": "en_US-ryan-high",
-	"pl": "pl_PL-darkman-medium",
+// Voice is one installed voice as its provider names it.
+type Voice struct {
+	Name string // opaque ID passed back to the provider
+	Lang string // language code, decided by the provider; empty when unknown
 }
 
-// Installed maps a voice name to the path of its .onnx model.
-type Installed map[string]string
-
-// Discover lists the *.onnx models in dirs. A directory that does not exist is
-// skipped (/work/voices is optional). When a name appears in several
-// directories the later one wins, so project voices override the image's.
-func Discover(dirs ...string) (Installed, error) {
-	inst := Installed{}
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("list voices in %s: %w", dir, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() || filepath.Ext(e.Name()) != modelExt {
-				continue
-			}
-			inst[strings.TrimSuffix(e.Name(), modelExt)] = filepath.Join(dir, e.Name())
-		}
-	}
-	return inst, nil
+// Catalog is what a provider offers: its installed voices and its built-in
+// default voice per language (BR-011).
+type Catalog struct {
+	Voices   []Voice
+	Defaults map[string]string // language -> voice name
 }
 
-// Lang returns the language code of a voice: the part of its name before the
-// first "_" (pl_PL-darkman-medium -> pl). It is empty when the name has none.
-func Lang(voice string) string {
-	code, _, found := strings.Cut(voice, "_")
-	if !found {
-		return ""
-	}
-	return code
+func (c Catalog) installed(name string) bool {
+	return slices.ContainsFunc(c.Voices, func(v Voice) bool { return v.Name == name })
 }
 
 // Resolve picks the voice for each of langs in priority order: script, then
-// built-in (BR-011). It returns the model path per language, or every
-// language that has no voice or an uninstalled one.
-func Resolve(langs []string, scriptVoices map[string]string, inst Installed) (map[string]string, failure.ValidationErrors) {
-	paths := make(map[string]string, len(langs))
+// the provider's default (BR-011). It returns the voice name per language, or
+// every language that has no voice or an uninstalled one.
+func Resolve(langs []string, scriptVoices map[string]string, c Catalog) (map[string]string, failure.ValidationErrors) {
+	names := make(map[string]string, len(langs))
 	var errs failure.ValidationErrors
 	for _, lang := range langs {
-		name := firstNonEmpty(scriptVoices[lang], builtin[lang])
+		name := firstNonEmpty(scriptVoices[lang], c.Defaults[lang])
 		if name == "" {
 			errs = append(errs, failure.ValidationError{Message: "no voice for language: " + lang})
 			continue
 		}
-		path, ok := inst[name]
-		if !ok {
+		if !c.installed(name) {
 			errs = append(errs, failure.ValidationError{Message: "voice not installed: " + name})
 			continue
 		}
-		paths[lang] = path
+		names[lang] = name
 	}
 	if len(errs) > 0 {
 		return nil, errs
 	}
-	return paths, nil
+	return names, nil
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -103,17 +70,17 @@ type Option struct {
 	Voices            []string // installed voice names, sorted
 }
 
-// Options lists en, pl and every other language with an installed voice,
-// sorted by code. The default voice is the built-in one (BR-011) and counts
+// Options lists every language with a default voice or an installed voice,
+// sorted by code. The default voice is the provider's (BR-011) and counts
 // only when it is installed, because Resolve would reject it otherwise.
-func Options(inst Installed) []Option {
+func Options(c Catalog) []Option {
 	byLang := map[string][]string{}
-	for lang := range builtin {
+	for lang := range c.Defaults {
 		byLang[lang] = nil
 	}
-	for name := range inst {
-		if lang := Lang(name); lang != "" {
-			byLang[lang] = append(byLang[lang], name)
+	for _, v := range c.Voices {
+		if v.Lang != "" {
+			byLang[v.Lang] = append(byLang[v.Lang], v.Name)
 		}
 	}
 
@@ -121,8 +88,8 @@ func Options(inst Installed) []Option {
 	opts := make([]Option, 0, len(byLang))
 	for lang, names := range byLang {
 		slices.Sort(names)
-		def := builtin[lang]
-		if _, ok := inst[def]; !ok {
+		def := c.Defaults[lang]
+		if !c.installed(def) {
 			def = ""
 		}
 		opts = append(opts, Option{
