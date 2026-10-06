@@ -47,7 +47,7 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 | Language selection, override > script > `["en"]` (BR-002) | one function, called by CLI, MCP validation and worker |
 | Voice resolution rules (BR-011) | `core/voices`, over a provider's `Catalog` |
 | Built-in voices per language and Piper naming (`.onnx`, language from the name) | `core/provider/piper` (`Defaults`) |
-| Which TTS provider runs, and its binary and voice paths | `provider.FromEnv` selects; the Dockerfile ENV lines hold the paths |
+| Which TTS provider runs, and its binary and voice paths | `provider.FromEnv` selects; the provider's `providers/<name>/Dockerfile` ENV lines hold the paths |
 | Step semantics (FR-005) and URL resolution against `baseUrl` (BR-010) | `core/executor`, shared by render and `explore_page` |
 | Failure shape `{step, lang, action, target, message}` | `core/failure`, used by CLI output, MCP tool errors and `jobs.error_json` |
 | Output filename and timestamp format (FR-010) | one function in `core/renderer` |
@@ -149,7 +149,7 @@ CI is as specified in PRD §18. `make lint`, `make vet` and `make test` run the 
 | `golangci-lint` (with a `depguard` rule for the import boundaries above) | unused code, error handling, boundary rules |
 | `go test ./...` for each workspace module | `core` rules (resolution, validation, timing math), queue order and recovery, schema accepts the example script and rejects invalid samples |
 | `make e2e` in the dev image (local, not in CI, Decision 54) | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render |
-| `make image` + `make image-check` (CI `image` job) | image builds, built-in voices (names from `piper.Defaults`) present |
+| `make image` + `make image-check` (CI `image` job) | base and provider image build, built-in voices (names from `piper.Defaults`, checked by `providers/piper/image-check.sh`) present |
 | `make e2e-runtime` (local) | the image's own binary, Chromium, Piper and ffmpeg render a video |
 
 Everything not in this table is a review point.
@@ -168,7 +168,7 @@ Everything not in this table is a review point.
 
 ## Known debt
 
-- `PLAYWRIGHT_GO_VERSION` in the `dev` stage of the `Dockerfile` repeats the playwright-go version in `core/go.mod`. Bump both together (the runtime image reads it from `go.mod`).
+- `PLAYWRIGHT_GO_VERSION` in the `dev-base` stage of the `Dockerfile` repeats the playwright-go version in `core/go.mod`. Bump both together (the runtime image reads it from `go.mod`).
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
 - The fixed 90 ms lead-in (ADR-46) is wrong when the WebM start lands in its late mode (~590 ms, ARCHITECTURE §17.1), so narration plays late in some renders. The e2e drift bound is ±150 ms, not FR-007's ±100 ms (`maxDrift`). Measure the lead-in per recording, then tighten the bound.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.

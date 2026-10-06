@@ -3,6 +3,11 @@ DEV_IMAGE := screencaster-dev
 IMAGE     := screencaster
 MODULES   := core cli mcp tests/e2e
 
+# The TTS provider layer to build on the base images: providers/$(PROVIDER)/
+# (ARCHITECTURE §12). Its Dockerfile has a `dev` and a `runtime` stage.
+PROVIDER     ?= piper
+PROVIDER_DIR := providers/$(PROVIDER)
+
 # --user keeps files created by the container owned by the caller.
 DEV_RUN := docker run --rm --user $(shell id -u):$(shell id -g) \
 	-v $(CURDIR):/src -v screencaster-go-cache:/cache $(DEV_IMAGE)
@@ -16,33 +21,28 @@ in_modules = $(DEV_RUN) sh -c 'for m in $(MODULES); do (cd $$m && $(1)) || exit 
 
 .PHONY: dev-image image image-base image-check test vet lint e2e e2e-runtime
 
+# The toolchain base, then the provider's dev stage on top. The provider build
+# context is its own folder: its Dockerfile downloads everything it needs.
 dev-image:
-	docker build --target dev -t $(DEV_IMAGE) .
+	docker build --target dev-base -t $(DEV_IMAGE)-base .
+	docker build -f $(PROVIDER_DIR)/Dockerfile --target dev \
+		-t $(DEV_IMAGE):$(PROVIDER) -t $(DEV_IMAGE) $(PROVIDER_DIR)
 
-# The Piper runtime image users run (FR-016), tagged :piper and latest. Stage
-# order puts runtime-piper last, so a plain `docker build .` gives the same result.
-image:
-	docker build --target runtime-piper -t $(IMAGE):piper -t $(IMAGE) .
+# The runtime image users run (FR-016): the base plus the provider layer, tagged
+# :$(PROVIDER) and latest.
+image: image-base
+	docker build -f $(PROVIDER_DIR)/Dockerfile --target runtime \
+		-t $(IMAGE):$(PROVIDER) -t $(IMAGE) $(PROVIDER_DIR)
 
-# The provider-free base: Chromium, ffmpeg and the binaries, no TTS. The base for
-# any other provider's image (Dockerfile header).
+# The provider-free base: Chromium, ffmpeg and the binaries, no TTS. Every
+# provider's runtime stage builds on it.
 image-base:
 	docker build --target runtime-base -t $(IMAGE)-base .
 
-# The built-in voice names come from the Piper adapter, so the image and the code
-# cannot drift apart (CODE_QUALITY DRY). The voice folder is the image's own
-# SCREENCASTER_PIPER_VOICES, so its path lives only in the Dockerfile. The
-# runtime image has no Go, hence shell.
+# Each provider owns its check (the built-in voices, for Piper), run against the
+# image `make image` tagged.
 image-check:
-	@want=$$(sed -n '/^var Defaults/,/^}/s/.*: *"\(.*\)",/\1/p' core/provider/piper/piper.go); \
-	test -n "$$want" || { echo "no built-in voices found in core/provider/piper"; exit 1; }; \
-	have=$$(docker run --rm $(IMAGE) sh -c 'ls "$$SCREENCASTER_PIPER_VOICES"'); \
-	for v in $$want; do \
-	  for ext in onnx onnx.json; do \
-	    echo "$$have" | grep -qx "$$v.$$ext" || { echo "missing in image: $$v.$$ext"; exit 1; }; \
-	  done; \
-	done; \
-	echo "image-check: ok ($$(echo $$want | tr '\n' ' '))"
+	@sh $(PROVIDER_DIR)/image-check.sh $(IMAGE):$(PROVIDER)
 
 test:
 	$(call in_modules,go test -race ./...)
@@ -60,7 +60,7 @@ e2e:
 
 # The CLI and card e2e tests against the runtime image (PRD M4 DoD): the test binary is
 # compiled in the dev image, then runs in the runtime image next to the image's
-# own screencaster binary, Chromium, Piper and ffmpeg. The fixture is served by
+# own screencaster binary, Chromium, TTS provider and ffmpeg. The fixture is served by
 # the test process itself, so no network is needed.
 e2e-runtime: image
 	$(DEV_RUN) sh -c 'cd tests/e2e && go test -c -tags e2e -o /src/.screencaster/e2e.test .'

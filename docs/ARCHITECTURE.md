@@ -73,6 +73,7 @@ mcp/
   queue/                   SQLite store + single worker                     FR-014, FR-015
 tests/e2e/                 own module, //go:build e2e
 testdata/                  fixture app and sample scripts
+providers/<name>/          one TTS provider's image layer: Dockerfile (dev + runtime stages), image-check.sh
 ```
 
 The JSON Schema sits next to the code that embeds it (`core/script`), because `go:embed` cannot reach a parent directory (Decision 55).
@@ -263,12 +264,13 @@ stateDiagram-v2
 
 ## 12. Docker image
 
-- One multi-stage image: `piper` (Piper + voices), `dev` (toolchain for `make`, with the Piper provider env), `build` (static binaries), `runtime-base` (both binaries, Chromium, ffmpeg, no TTS) and `runtime-piper` (base + Piper and the built-in voices; last, so `docker build .` yields it). Tags: `screencaster:piper` and `screencaster` (latest); `make image-base` tags `screencaster-base`. Piper and the voices are checksum-pinned.
+- **Base plus provider layer (Decision 65).** The root `Dockerfile` names no provider: `dev-base` (toolchain for `make`), `build` (static binaries) and `runtime-base` (both binaries, Chromium, ffmpeg, no TTS). Each provider is a folder `providers/<name>/` with its own `Dockerfile` whose `dev` and `runtime` stages build `FROM` those bases (`DEV_BASE`, `RUNTIME_BASE` build args) and set the provider ENV, plus an `image-check.sh`. `providers/piper` also holds the `piper` fetch stage (Piper + voices, checksum-pinned), shared by its `dev` and `runtime`.
+- **Build order.** `make dev-image` builds `screencaster-dev-base`, then `screencaster-dev` (tags `:<provider>` and latest). `make image` builds `screencaster-base`, then `screencaster:<provider>` and `screencaster` (latest). `PROVIDER` defaults to `piper`. `compose.yaml` only runs the built image, since compose cannot chain the two builds.
 - **Provider selection.** The image sets `SCREENCASTER_TTS` (and the provider's own variables: `SCREENCASTER_PIPER_BIN`, `SCREENCASTER_PIPER_VOICES`). `screencaster-mcp` calls `provider.FromEnv` at startup; the CLI calls it when a render starts, so `--help` and `version` work without a provider. Either way it fails with a clear message, before any render work, when the name is unset or unknown or the Piper binary is missing. No image path lives in Go code.
 - Voice discovery belongs to the provider. The Piper adapter scans the image's voice folder and `/work/voices` on every call; the language is the voice name up to the first `_` (FR-018).
 - `--add-host=host.docker.internal:host-gateway` lets a `baseUrl` reach the host app on Linux (Decision 27). The container runs as root, so output files are root-owned.
 - **Stdio hygiene.** MCP uses stdout for protocol frames, so all logging goes to stderr and subprocess output (Piper, ffmpeg, the Playwright driver) is captured, never inherited. A stray byte on stdout corrupts the session.
-- Go tooling runs in the dev image (Decision 52); `make image-check` verifies the built-in voices are in the image.
+- Go tooling runs in the dev image (Decision 52); `make image-check` runs the provider's own `image-check.sh` (for Piper: the built-in voices are in the image).
 
 ## 13. Testing strategy
 
@@ -292,7 +294,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 - **Slides / overlays** (PRD §10.2): only start and end cards exist (Decision 63). Interleaved slides would change the recorder output and the assembler; overlays would hook in as an executor init script, like the cursor.
 - **New languages:** no code change, add the voice files under `/work/voices`.
-- **Other TTS engines:** one adapter package `core/provider/<name>` that satisfies `provider.Engine` (`Catalog`, and `Synthesize` into a PCM WAV), one case in `provider.FromEnv`, and an image layer: a `runtime-<name>` stage (local binary: fetch stage + ENV; cloud or sidecar: `FROM runtime-base` + ENV only). Script voice IDs are opaque per provider, so a switch may need `voices:` edits. A network provider must revisit NFR-003 and BR-001 first. Piper is the only adapter today.
+- **Other TTS engines:** one adapter package `core/provider/<name>` that satisfies `provider.Engine` (`Catalog`, and `Synthesize` into a PCM WAV), one case in `provider.FromEnv`, and an image layer: a folder `providers/<name>/` (Dockerfile with `dev` and `runtime` stages on the bases, plus `image-check.sh`; local binary: fetch stage + COPY + ENV; cloud or sidecar: ENV only). No existing file changes except the `FromEnv` case. Script voice IDs are opaque per provider, so a switch may need `voices:` edits. A network provider must revisit NFR-003 and BR-001 first. Piper is the only adapter today.
 
 ## 16. Architecture decisions
 
@@ -321,7 +323,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60 and 62–
 | 62 | Demo paths resolve against the demo's folder and must stay inside the working directory. Supersedes the rejection in 58 | A demo, its videos and its pictures move together. |
 | 63 | Every video gets a start and end card unless `false`; built-in cards are an embedded HTML page screenshotted by Chromium, a custom `image` is used as is; the assembler joins them with `concat` and shifts clip offsets by the intro | Chromium wraps text and has the Polish glyphs. Recorded cards would meet the bimodal start (§17.1). |
 | 64 | Render log lines come from `renderer` through `Request.Log`; the caller chooses stderr or `slog` | One place for the wording; nothing on stdout. |
-| 65 | The TTS provider sits behind `provider.Engine`, chosen by `SCREENCASTER_TTS` at startup; the image is `runtime-base` plus one provider layer | A new provider is one adapter, one `FromEnv` case and one image layer. Piper details stay in `core/provider/piper`; the image owns the provider and its paths. |
+| 65 | The TTS provider sits behind `provider.Engine`, chosen by `SCREENCASTER_TTS` at startup; the image is `runtime-base` plus one provider layer, and each layer lives in its own `providers/<name>/` folder, not in the root `Dockerfile` | A new provider is one adapter, one `FromEnv` case and one folder. Piper details stay in `core/provider/piper` and `providers/piper`; the image owns the provider and its paths. |
 
 ## 17. Open items for spikes
 

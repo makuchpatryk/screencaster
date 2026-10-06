@@ -1,10 +1,9 @@
 # Run: docker compose run --rm screencaster render demos/my-demo.yaml
 services:
   screencaster:
+    # Built by `make image` (base plus providers/piper); compose cannot chain the
+    # two builds. Another provider: `make image PROVIDER=<name>` and its tag here.
     image: screencaster:piper
-    build:
-      context: .
-      target: runtime-piper
     entrypoint: ["screencaster"]
     # Forwards SIGTERM so a stopped render cleans up.
     init: true

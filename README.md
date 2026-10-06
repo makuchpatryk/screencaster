@@ -16,14 +16,14 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
 
 2. **Docker** (recommended; one image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg):
    ```bash
-   docker compose build    # or: make image (tags screencaster:piper and screencaster)
+   make image              # builds the base, then providers/piper (tags screencaster:piper and screencaster)
    docker compose run --rm screencaster render demos/my-demo.yaml
    ```
    - `compose.yaml` sets `--init` (forwards SIGTERM, so a stopped render cleans up), `--shm-size=1g`, the `host.docker.internal` host mapping and the `.:/work` mount.
    - The host mapping lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
    - Plain Docker works too: `docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml`.
    - The container runs as root: the rendered files belong to root.
-   - The TTS provider comes from the image's environment: the Piper image sets `SCREENCASTER_TTS=piper` plus `SCREENCASTER_PIPER_BIN` and `SCREENCASTER_PIPER_VOICES`. Both binaries exit at startup when `SCREENCASTER_TTS` is unset or unknown, so a hand-built image must set it. `make image-base` builds the same image without any provider.
+   - The TTS provider comes from the image's environment: the Piper image sets `SCREENCASTER_TTS=piper` plus `SCREENCASTER_PIPER_BIN` and `SCREENCASTER_PIPER_VOICES`. Both binaries exit at startup when `SCREENCASTER_TTS` is unset or unknown, so a hand-built image must set it. `make image-base` builds the same image without any provider; each provider is a folder `providers/<name>/` with its own `Dockerfile`, built on it by `make image PROVIDER=<name>` (default `piper`).
    - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
 
 3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. Every path in a demo (`outputDir`, an intro or outro `image`) is relative to the demo file's folder and must stay inside the working directory (`/work` in Docker):
@@ -78,7 +78,8 @@ cli/           screencaster render ... CLI
 mcp/           screencaster-mcp MCP server
 tests/e2e/     end-to-end tests (own module, local only)
 testdata/      fixture HTML app and sample scripts
-Dockerfile
+providers/     one folder per TTS provider: its Dockerfile layer on the base image
+Dockerfile     the provider-free base image
 Makefile
 ```
 
@@ -87,16 +88,16 @@ Makefile
 The host needs only Docker. Go, golangci-lint, Chromium, Piper and ffmpeg live in the dev image; the source is mounted, not copied.
 
 ```bash
-make dev-image   # build the dev image once, rebuild when the Dockerfile changes
+make dev-image   # build the dev image once, rebuild when a Dockerfile changes (PROVIDER=piper by default)
 make test        # go test -race in core, cli, mcp, tests/e2e
 make vet         # go vet in every module
 make lint        # golangci-lint (incl. import-boundary rules) in every module
 ```
 
 ```bash
-make image         # build the Piper runtime image (screencaster:piper, screencaster)
+make image         # build the base and the provider's runtime image (screencaster:piper, screencaster)
 make image-base    # the provider-free base (screencaster-base)
-make image-check   # built-in voices from the Piper adapter are present in it
+make image-check   # the provider's own check: for Piper, the built-in voices are in the image
 make e2e           # real Chromium, Piper, ffmpeg in the dev image
 make e2e-runtime   # the CLI tests against the runtime image
 ```
