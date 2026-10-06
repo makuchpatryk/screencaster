@@ -4,7 +4,7 @@ run:
   build-tags: [e2e] # lint the e2e test files too
 
 # Import boundaries from ARCHITECTURE §3 and CODE_QUALITY "Separation of
-# concerns". Patterns match the file path, so each rule works in every module.
+# concerns". Patterns match the file path, test files included.
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused
   enable:
@@ -13,38 +13,67 @@ linters:
   settings:
     depguard:
       rules:
-        core-no-adapters:
-          files: ["**/core/**"]
+        domain-pure:
+          files: ["**/internal/domain/**"]
           deny:
+            - pkg: screencaster/internal/app
+              desc: domain packages are pure rules; use cases live in internal/app
+            - pkg: screencaster/internal/adapters
+              desc: domain packages must not reach a tool wrapper
+            - pkg: screencaster/cmd
+              desc: domain packages must not import an entry point
+            - pkg: os/exec
+              desc: domain packages start no processes
+            - pkg: github.com/mxschmitt/playwright-go
+              desc: only adapters/browser talks to playwright-go
             - pkg: modernc.org/sqlite
-              desc: core must not import SQLite (queue lives in mcp/queue)
+              desc: only adapters/sqlite opens SQLite
             - pkg: github.com/modelcontextprotocol/go-sdk
-              desc: core must not import the MCP SDK
-            - pkg: screencaster/cli
-              desc: core must not import its entry points
-            - pkg: screencaster/mcp
-              desc: core must not import its entry points
-        core-exec-only-in-wrappers:
-          files: ["**/core/**", "!**/core/provider/piper/**", "!**/core/assembler/**", "!**/core/browser/**"]
+              desc: only adapters/mcpserver and cmd/screencaster-mcp use the MCP SDK
+        app-ports-only:
+          files: ["**/internal/app/**", "!**/internal/app/wire/**"]
+          deny:
+            - pkg: screencaster/internal/adapters
+              desc: use cases reach tools through ports; only app/wire wires adapters
+            - pkg: os/exec
+              desc: only the tool adapters spawn processes
+            - pkg: github.com/mxschmitt/playwright-go
+              desc: only adapters/browser talks to playwright-go
+            - pkg: modernc.org/sqlite
+              desc: only adapters/sqlite opens SQLite
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: only adapters/mcpserver and cmd/screencaster-mcp use the MCP SDK
+        exec-only-in-wrappers:
+          files:
+            - "**/internal/**"
+            - "**/cmd/**"
+            - "!**/internal/adapters/tts/piper/**"
+            - "!**/internal/adapters/assembler/**"
+            - "!**/internal/adapters/browser/**"
           deny:
             - pkg: os/exec
-              desc: only core/provider/piper, core/assembler and core/browser spawn processes
-        core-playwright-only-in-browser:
-          files: ["**/core/**", "!**/core/browser/**"]
+              desc: only adapters/tts/piper, adapters/assembler and adapters/browser spawn processes
+        playwright-only-in-browser:
+          files: ["$all", "!**/internal/adapters/browser/**"]
           deny:
             - pkg: github.com/mxschmitt/playwright-go
-              desc: only core/browser talks to playwright-go
-        cli-no-mcp:
-          files: ["**/cli/**"]
+              desc: only adapters/browser talks to playwright-go
+        sqlite-only-in-adapter:
+          files: ["$all", "!**/internal/adapters/sqlite/**"]
           deny:
-            - pkg: screencaster/mcp
-              desc: cli must not import mcp
-            - pkg: github.com/modelcontextprotocol/go-sdk
-              desc: cli must not import the MCP SDK
             - pkg: modernc.org/sqlite
-              desc: cli must not import SQLite
-        queue-no-mcp-sdk:
-          files: ["**/mcp/queue/**"]
+              desc: only adapters/sqlite opens SQLite
+        mcp-sdk-only-in-server:
+          files: ["$all", "!**/internal/adapters/mcpserver/**", "!**/cmd/screencaster-mcp/**"]
           deny:
             - pkg: github.com/modelcontextprotocol/go-sdk
-              desc: mcp/queue must not import MCP SDK types
+              desc: only adapters/mcpserver and cmd/screencaster-mcp use the MCP SDK
+        cli-no-mcp:
+          files: ["**/cmd/screencaster/**"]
+          deny:
+            - pkg: screencaster/internal/adapters/mcpserver
+              desc: the CLI has no MCP server
+            - pkg: screencaster/internal/adapters/sqlite
+              desc: the CLI has no job queue (BP-003)
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: the CLI must not import the MCP SDK

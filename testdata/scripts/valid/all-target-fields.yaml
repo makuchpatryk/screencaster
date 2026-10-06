@@ -21,5 +21,4 @@ storageState:
           value: t0k3n
 outputDir: videos
 steps:
-  - action: goto
-    url: /projects
+  - goto: /projects

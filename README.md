@@ -8,10 +8,9 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
 
 ## Quick start
 
-1. **Clone and build** (Go 1.25; `go.work` is committed):
+1. **Clone and build** (Go 1.25, one module):
    ```bash
-   go build -o screencaster ./cli
-   go build -o screencaster-mcp ./mcp
+   go build ./cmd/...      # screencaster and screencaster-mcp
    ```
 
 2. **Docker** (recommended; one image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg):
@@ -43,16 +42,12 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
      image: assets/logo.png                    # your own picture instead (PNG or JPEG)
    outro: false                                # no end card
    steps:
-     - action: goto
-       url: /projects
-     - action: click
-       selector: role=button[name="New project"]
+     - goto: /projects
+     - click: role=button[name="New project"]
        narration:
          en: Click the New project button.
          pl: Kliknij przycisk Nowy projekt.
-     - action: fill
-       selector: input[name="name"]
-       value: My Project
+     - fill: { selector: 'input[name="name"]', value: My Project }
    ```
    `narration` is optional on every step; a step without it is silent. A step that has it needs an entry for every selected language, and an empty string (`en: ""`) keeps the step silent in that language.
 
@@ -73,10 +68,9 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
 ## Project layout
 
 ```
-core/          shared library (no MCP, no SQLite); script.schema.json lives in core/script
-cli/           screencaster render ... CLI
-mcp/           screencaster-mcp MCP server
-tests/e2e/     end-to-end tests (own module, local only)
+cmd/           the two binaries: screencaster (CLI) and screencaster-mcp
+internal/      domain/ (pure rules; script.schema.json in domain/script), app/ (use cases), adapters/ (tools)
+tests/e2e/     end-to-end tests (//go:build e2e)
 testdata/      fixture HTML app and sample scripts
 providers/     one folder per TTS provider: its Dockerfile layer on the base image
 Dockerfile     the provider-free base image
@@ -89,9 +83,9 @@ The host needs only Docker. Go, golangci-lint, Chromium, Piper and ffmpeg live i
 
 ```bash
 make dev-image   # build the dev image once, rebuild when a Dockerfile changes (PROVIDER=piper by default)
-make test        # go test -race in core, cli, mcp, tests/e2e
-make vet         # go vet in every module
-make lint        # golangci-lint (incl. import-boundary rules) in every module
+make test        # go test -race ./... (one module)
+make vet         # go vet -tags e2e ./...
+make lint        # golangci-lint (incl. import-boundary rules)
 ```
 
 ```bash
@@ -102,7 +96,7 @@ make e2e           # real Chromium, Piper, ffmpeg in the dev image
 make e2e-runtime   # the CLI tests against the runtime image
 ```
 
-E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-in test is timing-sensitive.
+E2E runs in CI on every push and PR (`e2e` job) and locally with `make e2e`. Run it locally on an idle machine: the drift check is timing-sensitive.
 
 ## Scripts
 
@@ -114,7 +108,7 @@ E2E runs locally only, not in CI. Run it on an idle machine: the recording lead-
 - One render at a time (BR-008, FR-014)
 - 30 s timeout per step (BR-004, FR-008)
 - 1920×1080 30 fps H.264 MP4 (FR-004, FR-009)
-- Deterministic: no LLM at render time (BR-001)
+- Deterministic script: the same YAML and voices give the same steps, timing and narration placement; no LLM at render time (BR-001). Pixels and audio bytes may differ between runs (browser rendering, encoder, TTS build).
 - Offline TTS via Piper (§9)
 
 ## Notes

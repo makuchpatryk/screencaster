@@ -2,5 +2,4 @@ name: demo
 baseUrl: http://host.docker.internal:3000
 title: not a field
 steps:
-  - action: goto
-    url: /
+  - goto: /

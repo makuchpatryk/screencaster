@@ -3,5 +3,4 @@ baseUrl: http://host.docker.internal:3000
 intro:
   image: logo.gif
 steps:
-  - action: goto
-    url: /
+  - goto: /

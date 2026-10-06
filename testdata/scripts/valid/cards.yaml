@@ -6,5 +6,4 @@ intro:
   durationMs: 4500
 outro: false
 steps:
-  - action: goto
-    url: /
+  - goto: /

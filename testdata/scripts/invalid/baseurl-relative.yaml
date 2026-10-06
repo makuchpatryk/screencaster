@@ -1,5 +1,4 @@
 name: demo
 baseUrl: /app
 steps:
-  - action: goto
-    url: /
+  - goto: /

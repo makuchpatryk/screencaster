@@ -3,7 +3,6 @@ name: demo
 baseUrl: http://host.docker.internal:3000
 languages: [en, pl]
 steps:
-  - action: goto
-    url: /
+  - goto: /
     narration:
       en: Only English here.

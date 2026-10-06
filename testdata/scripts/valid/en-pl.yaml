@@ -8,13 +8,11 @@ meta:
   description: Shows how to create a project.
   audience: sales
 steps:
-  - action: goto
-    url: http://127.0.0.1:3000/projects
+  - goto: http://127.0.0.1:3000/projects
     narration:
       en: This is the projects page.
       pl: To jest strona projektów.
-  - action: click
-    selector: "#new-project"
+  - click: "#new-project"
     narration:
       en: Click New project.
       pl: Kliknij Nowy projekt.

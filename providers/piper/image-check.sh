@@ -6,8 +6,8 @@
 set -eu
 
 image=$1
-want=$(sed -n '/^var Defaults/,/^}/s/.*: *"\(.*\)",/\1/p' core/provider/piper/piper.go)
-test -n "$want" || { echo "no built-in voices found in core/provider/piper"; exit 1; }
+want=$(sed -n '/^var Defaults/,/^}/s/.*: *"\(.*\)",/\1/p' internal/adapters/tts/piper/piper.go)
+test -n "$want" || { echo "no built-in voices found in internal/adapters/tts/piper"; exit 1; }
 have=$(docker run --rm "$image" sh -c 'ls "$SCREENCASTER_PIPER_VOICES"')
 for v in $want; do
   for ext in onnx onnx.json; do

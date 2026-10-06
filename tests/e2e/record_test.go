@@ -10,31 +10,29 @@ import (
 	"testing"
 	"time"
 
-	"screencaster/core/browser"
-	"screencaster/core/failure"
-	"screencaster/core/recorder"
-	"screencaster/core/script"
+	"screencaster/internal/adapters/browser"
+	"screencaster/internal/domain/failure"
+	"screencaster/internal/domain/recorder"
+	"screencaster/internal/domain/script"
 )
-
-func intp(n int) *int { return &n }
 
 // A silent recording of the fixture app (FR-004, FR-005, FR-006): the
 // storageState cookie shows #logged-in, a form is filled and submitted.
 func TestRecord_fixtureApp(t *testing.T) {
 	base := fixtureApp(t)
 	steps := []script.Step{
-		{Action: "goto", URL: "/index.html"},
-		{Action: "wait", Selector: "#logged-in"}, // visible only with the storageState cookie
-		{Action: "goto", URL: "/projects.html"},
-		{Action: "click", Selector: "role=button[name=\"New project\"]"},
-		{Action: "fill", Selector: "input[name=\"name\"]", Value: "Demo"},
-		{Action: "select", Selector: "select[name=\"visibility\"]", Value: "private"},
-		{Action: "press", Selector: "input[name=\"name\"]", Key: "Tab"},
-		{Action: "click", Selector: "role=button[name=\"Create\"]"},
-		{Action: "wait", Selector: "#toast"},
-		{Action: "scroll", Selector: "#footer"},
-		{Action: "scroll", Y: intp(0)},
-		{Action: "wait", Ms: intp(200)},
+		{Action: script.Goto{URL: "/index.html"}},
+		{Action: script.WaitFor{Selector: "#logged-in"}}, // visible only with the storageState cookie
+		{Action: script.Goto{URL: "/projects.html"}},
+		{Action: script.Click{Selector: "role=button[name=\"New project\"]"}},
+		{Action: script.Fill{Selector: "input[name=\"name\"]", Value: "Demo"}},
+		{Action: script.Select{Selector: "select[name=\"visibility\"]", Value: "private"}},
+		{Action: script.Press{Key: "Tab", Selector: "input[name=\"name\"]"}},
+		{Action: script.Click{Selector: "role=button[name=\"Create\"]"}},
+		{Action: script.WaitFor{Selector: "#toast"}},
+		{Action: script.ScrollInto{Selector: "#footer"}},
+		{Action: script.ScrollTo{Y: 0}},
+		{Action: script.Pause{D: 200 * time.Millisecond}},
 	}
 
 	out, err := newRecorder(t, nil).Record(context.Background(), recordInput(t, base, "en", steps))
@@ -51,10 +49,11 @@ func TestRecord_fixtureApp(t *testing.T) {
 
 // The recording opens dark: a new page is white until the first goto paints,
 // which showed as a white flash right after the start card. No step navigates
-// here, so every frame is the start page.
+// here, so every frame is the start page: the sync marker (magenta, YAVG about
+// 80-105), then the card colour. The assembler cuts the marker off.
 func TestRecord_startsDark(t *testing.T) {
 	base := fixtureApp(t)
-	steps := []script.Step{{Action: "wait", Ms: intp(1000)}}
+	steps := []script.Step{{Action: script.Pause{D: time.Second}}}
 
 	out, err := newRecorder(t, nil).Record(context.Background(), recordInput(t, base, "en", steps))
 	if err != nil {
@@ -69,7 +68,7 @@ func TestRecord_startsDark(t *testing.T) {
 func TestRecord_twoRecordingsAreIndependent(t *testing.T) {
 	base := fixtureApp(t)
 	rec := newRecorder(t, nil)
-	steps := []script.Step{{Action: "goto", URL: "/index.html"}, {Action: "wait", Selector: "#logged-in"}}
+	steps := []script.Step{{Action: script.Goto{URL: "/index.html"}}, {Action: script.WaitFor{Selector: "#logged-in"}}}
 
 	en, err := rec.Record(context.Background(), recordInput(t, base, "en", steps))
 	if err != nil {
@@ -85,21 +84,22 @@ func TestRecord_twoRecordingsAreIndependent(t *testing.T) {
 }
 
 // FR-008 AC: a missing selector at step 4 aborts with step 4 and lang en
-// within 31 s. The clock starts once Chromium is up: the 30 s bound is on the
-// action, not on the browser launch.
+// within 31 s. The clock starts once Chromium is up and leaves out the sync
+// marker hold: the 30 s bound is on the action, not on the browser launch or
+// the marker (decision 69).
 func TestRecord_missingSelectorAbortsWithinTimeout(t *testing.T) {
 	base := fixtureApp(t)
 	var launched time.Time
 	steps := []script.Step{
-		{Action: "goto", URL: "/index.html"},
-		{Action: "wait", Selector: "#logged-in"},
-		{Action: "goto", URL: "/projects.html"},
-		{Action: "click", Selector: "#does-not-exist"},
-		{Action: "goto", URL: "/index.html"},
+		{Action: script.Goto{URL: "/index.html"}},
+		{Action: script.WaitFor{Selector: "#logged-in"}},
+		{Action: script.Goto{URL: "/projects.html"}},
+		{Action: script.Click{Selector: "#does-not-exist"}},
+		{Action: script.Goto{URL: "/index.html"}},
 	}
 
 	_, err := newRecorder(t, &launched).Record(context.Background(), recordInput(t, base, "en", steps))
-	elapsed := time.Since(launched)
+	elapsed := time.Since(launched) - recorder.MarkerHold
 
 	var f *failure.Failure
 	if !errors.As(err, &f) {
@@ -150,49 +150,6 @@ func TestBrowser_ambiguousSelectorFailsFast(t *testing.T) {
 				t.Error("took the full timeout instead of failing fast")
 			}
 		})
-	}
-}
-
-// Spike S1 (ARCHITECTURE §17, ADR-46): video time 0 starts ~90 ms after t0.
-// Click the marker at a known offset from t0 and find the white flash in the raw
-// WebM; with recorder.LeadInCompensation applied the two must agree within 100 ms.
-// Measured spread without it: 52-129 ms early, one frame step is 40 ms.
-func TestRecord_leadInIsWithinTolerance(t *testing.T) {
-	base := fixtureApp(t)
-	sess, err := browser.Launcher{}.Launch(context.Background(), browser.Options{
-		BaseURL:  base,
-		VideoDir: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _, _ = sess.Close() }()
-
-	t0 := time.Now()
-	if err := sess.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if err := sess.Goto(base + "/marker.html"); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(time.Second)
-	clickAt := time.Since(t0)
-	if err := sess.Click("#marker"); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(1500 * time.Millisecond) // the flash lasts 1 s
-	video, err := sess.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The recorder places audio at t0-offset minus LeadInCompensation; the flash
-	// frame must land there.
-	flashAt := flashOnset(t, video, 0)
-	drift := flashAt - (clickAt - recorder.LeadInCompensation)
-	t.Logf("S1: click at t0+%v, flash frame at %v, difference %v", clickAt.Round(time.Millisecond), flashAt.Round(time.Millisecond), drift.Round(time.Millisecond))
-	if drift < -100*time.Millisecond || drift > 100*time.Millisecond {
-		t.Errorf("flash frame is %v from the click offset, want within 100ms", drift)
 	}
 }
 

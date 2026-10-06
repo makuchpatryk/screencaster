@@ -7,7 +7,7 @@
 # the image users run. The context holds no files: everything is downloaded.
 #
 # The ENV lines are the only place the Piper paths live; the adapter in
-# core/provider/piper reads them through provider.FromEnv.
+# internal/adapters/tts/piper reads them through wire.TTS.
 ARG DEV_BASE=screencaster-dev-base
 ARG RUNTIME_BASE=screencaster-base
 

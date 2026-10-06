@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"screencaster/core/browser"
-	"screencaster/core/card"
+	"screencaster/internal/adapters/browser"
+	"screencaster/internal/domain/card"
 )
 
 // shoot renders each text as a built-in card and returns the PNG paths.

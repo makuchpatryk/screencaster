@@ -22,8 +22,9 @@ RUN go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI
     && rm -rf /go/pkg /root/.cache
 # Chromium for the recorder tests (M2). The module path is mxschmitt, not
 # playwright-community: the project moved from v0.6100.0 on. The driver and
-# browser live outside $HOME so any --user can run them (core/browser takes the
-# driver directory as an argument; the driver itself reads PLAYWRIGHT_BROWSERS_PATH).
+# browser live outside $HOME so any --user can run them (adapters/browser takes
+# the driver directory as an argument; the driver itself reads
+# PLAYWRIGHT_BROWSERS_PATH). Keep the version equal to go.mod's.
 ARG PLAYWRIGHT_GO_VERSION=v0.6201.1
 ENV PLAYWRIGHT_DRIVER_PATH=/opt/playwright-driver \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
@@ -34,7 +35,7 @@ RUN GOCACHE=/tmp/gocache GOMODCACHE=/tmp/gomod GOBIN=/usr/local/bin \
     && chmod -R a+rX /opt/playwright-driver /opt/ms-playwright \
     && rm -rf /tmp/gocache /tmp/gomod /var/lib/apt/lists/*
 # ffmpeg/ffprobe: the e2e tests read frames from the recording (spike S1) and
-# core/assembler muxes with it.
+# adapters/assembler muxes with it.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
@@ -52,16 +53,13 @@ WORKDIR /src
 # its own copy above).
 FROM golang:1.25-bookworm AS build
 WORKDIR /src
-COPY go.work ./
-COPY core core
-COPY cli cli
-COPY mcp mcp
-COPY tests/e2e/go.mod tests/e2e/go.mod
+COPY go.mod go.sum ./
+COPY cmd cmd
+COPY internal internal
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     mkdir /out \
-    && (cd cli && CGO_ENABLED=0 go build -trimpath -o /out/screencaster .) \
-    && (cd mcp && CGO_ENABLED=0 go build -trimpath -o /out/screencaster-mcp .) \
-    && (cd core && go build -o /out/playwright github.com/mxschmitt/playwright-go/cmd/playwright)
+    && CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/... \
+    && go build -o /out/playwright github.com/mxschmitt/playwright-go/cmd/playwright
 
 # runtime-base: everything but a TTS provider. Runs as root with the project
 # mounted at /work. Use `docker run --init` so SIGTERM reaches the process

@@ -33,7 +33,7 @@ N/A — confirmed by user. The MVP is an internal tool. A future commercial vers
 ## 5. Business Rules
 
 ### BR-001: Deterministic rendering
-- **Rule:** A render must replay the stored YAML script exactly. No LLM may be called during rendering.
+- **Rule:** A render must replay the stored YAML script exactly: the same script and voices give the same steps, timing and narration placement. No LLM may be called during rendering. Pixels and audio bytes may differ between runs (browser rendering, encoder, TTS build).
 - **Applies to:** Every render (CLI and MCP).
 - **Exceptions:** None.
 
@@ -223,7 +223,7 @@ None identified by user.
 
 ### FR-002: Script schema & validation
 - **Implements:** BR-001, BR-002, BR-010
-- **Description:** The system must parse the YAML script and validate it against a JSON Schema file (`core/script/script.schema.json`, embedded with `go:embed` in `core/script` and so compiled into both binaries) using `santhosh-tekuri/jsonschema`, before any browser or TTS work.
+- **Description:** The system must parse the YAML script and validate it against a JSON Schema file (`internal/domain/script/script.schema.json`, embedded with `go:embed` in that package and so compiled into both binaries) using `santhosh-tekuri/jsonschema`, before any browser or TTS work.
 - **Inputs / validation:**
   - `name` (string, required, `^[a-z0-9-]{1,64}$`; used in output filenames)
   - `baseUrl` (string, required), `storageState` (object, optional), `outputDir` (string, optional): see FR-001
@@ -231,19 +231,17 @@ None identified by user.
   - `voices` (object, optional, keys are language codes, values Piper voice names; installed check per BR-011)
   - `meta` (object, optional: `title` ≤ 120 chars, `description` ≤ 500 chars, `audience` one of `release-notes | sales | marketing`)
   - `steps` (array, required, 1–200 items)
-  - Each step:
-    - `action` (required, one of `goto | click | fill | select | press | hover | scroll | wait`)
+  - Each step (decision 70): exactly one action, written as the step's key, plus optional `narration`:
+    - `goto: <url>` (string)
+    - `click: <selector>`, `hover: <selector>`
+    - `fill: { selector, value }`, `select: { selector, value }` (an empty `value` clears a field)
+    - `press: <key>`, or `press: { key, selector }` to press on an element
+    - `scroll: <selector>` (into view), or `scroll: { y }` (window to `y` px, integer)
+    - `wait: <ms>` (integer 1–30000), or `wait: <selector>` (until visible)
     - `narration` (optional object keyed by language code (`en`, `pl`, `de`, …), each a string ≤ 1000 chars, where an empty string keeps the step silent in that language; must contain an entry for every selected language; text for unselected languages is allowed and ignored; this cross-field rule is checked in code after schema validation)
-    - Action-specific fields:
-      - `goto`: `url` (required)
-      - `click`, `hover`: `selector` (required)
-      - `fill`: `selector` + `value` (required)
-      - `select`: `selector` + `value` (required)
-      - `press`: `key` (required), `selector` (optional)
-      - `scroll`: exactly one of `selector` or `y` (integer px)
-      - `wait`: exactly one of `ms` (integer 1–30000) or `selector`
+    - Example: `- fill: { selector: "#email", value: demo@example.com }`
   - Selectors are Playwright selector strings (CSS, `role=`, `text=`).
-- **Edge cases:** Unknown fields → invalid. Empty `steps` → invalid.
+- **Edge cases:** Unknown fields → invalid. Empty `steps` → invalid. A step with no action or two actions → invalid. A step in the old flat form (`action: click`) → invalid, with one hint to use the action as the key.
 - **Acceptance criteria:**
   - Given `languages: [en, pl]` and a step with `narration.en` but no `narration.pl`, when validating, then validation fails with a JSON pointer to that step.
   - Given no `languages` field and a step with only `narration.en`, when validating, then the script is valid.
@@ -272,16 +270,16 @@ None identified by user.
 ### FR-005: Step execution
 - **Implements:** BR-003, BR-004, BR-010
 - **Description:** The system must execute the steps in order with these semantics:
-  - `goto`: navigate (relative URLs resolved against `baseUrl`) and wait for `load`.
-  - `click`: click the element.
-  - `fill`: type `value` into the element (FR-006).
-  - `select`: select the option by value or label.
-  - `press`: press the key, focused on `selector` if given.
-  - `hover`: hover the element.
-  - `scroll`: scroll the element into view, or scroll the window to `y`.
-  - `wait`: sleep `ms`, or wait until `selector` is visible.
+  - `goto: <url>`: navigate (relative URLs resolved against `baseUrl`) and wait for `load`.
+  - `click: <selector>`: click the element.
+  - `fill: { selector, value }`: type `value` into the element (FR-006).
+  - `select: { selector, value }`: select the option by value or label.
+  - `press: <key>` or `press: { key, selector }`: press the key, focused on `selector` if given.
+  - `hover: <selector>`: hover the element.
+  - `scroll: <selector>` or `scroll: { y }`: scroll the element into view, or scroll the window to `y`.
+  - `wait: <ms>` or `wait: <selector>`: sleep `ms`, or wait until the selector is visible.
 - **Acceptance criteria:**
-  - Given `goto` with url `/projects` and baseUrl `http://host.docker.internal:3000`, when executed, then the page URL is `http://host.docker.internal:3000/projects`.
+  - Given `goto: /projects` and baseUrl `http://host.docker.internal:3000`, when executed, then the page URL is `http://host.docker.internal:3000/projects`.
 
 ### FR-006: Human-like visuals
 - **Implements:** Goal (demo quality)
@@ -441,6 +439,7 @@ None identified by user.
 | finished_at | TEXT | no | RFC 3339 UTC | |
 | outputs_json | TEXT | no | JSON `[{lang,path,durationMs}]` | set on success |
 | error_json | TEXT | no | JSON `{step,lang,action,target,message}` | set on failure; `interrupted` uses `{message:"interrupted"}` |
+| script | TEXT | no | the YAML as validated by `render_video` | the job renders these bytes, not the file at run time; `NULL` only in rows from before the column, which fail with `job has no script snapshot` |
 
 ### Files (no DB)
 - `demos/*.yaml` (scripts, each with its own target settings), `<outputDir>/*.mp4` (default `demos/output/` for `demos/x.yaml`).
@@ -493,14 +492,15 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | TTS | Piper | voices en_US-ryan-high, pl_PL-darkman-medium |
 | Media | ffmpeg, ffprobe | — |
 | Hosting / Deployment | Docker image, run locally | — |
-| CI/CD | GitHub Actions: golangci-lint, go vet, go test, docker build (from M4) | — |
-| Testing | `go test` unit tests + 1 e2e render against a fixture HTML app (local, `make e2e`; not in CI) | — |
+| CI/CD | GitHub Actions: golangci-lint, go vet, go test, docker build, e2e in the dev image (ARCHITECTURE decision 68) | — |
+| Testing | `go test` unit tests + 1 e2e render against a fixture HTML app (`make e2e`, also the CI `e2e` job) | — |
 
-- **Repo structure:** Go workspace (`go.work`, committed) with four modules:
-  - `core/` (script + `script.schema.json`, voices, TTS, recorder, assembler, renderer, explorer)
-  - `cli/` (`screencaster`)
-  - `mcp/` (`screencaster-mcp`, queue, SQLite)
-  - `tests/e2e/` (end-to-end tests, run locally with `make e2e`)
+- **Repo structure:** one Go module (`module screencaster`, decision 67):
+  - `cmd/screencaster/`, `cmd/screencaster-mcp/` (the two binaries)
+  - `internal/domain/` (script + `script.schema.json`, voices, failure, card, executor, recorder)
+  - `internal/app/` (renderer, explorer, jobs, wire)
+  - `internal/adapters/` (browser, assembler, TTS, SQLite, MCP server, lock, file system)
+  - `tests/e2e/` (end-to-end tests, `make e2e`)
 
   Also at the repo root: `testdata/` (fixture app, sample scripts), `Dockerfile`, `Makefile`, `.golangci.yml`.
 
@@ -564,7 +564,7 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 26 | MCP server in Docker via `docker run -i`, project mounted at /work | Host install | User choice |
 | 27 | host.docker.internal in baseUrl (+ host-gateway flag on Linux) | --network host, remote only | User choice |
 | 28 | Go + playwright-go | TypeScript (recommended), C#, Python, Go+chromedp | User choice; Node driver still bundled |
-| 29 | Go workspace: core, cli, mcp modules | Single module | User choice |
+| 29 | Go workspace: core, cli, mcp modules | Single module | User choice. Superseded by ARCHITECTURE decision 67 (one module). |
 | 30 | JSON Schema + santhosh-tekuri/jsonschema | Struct validation | Same schema reused in MCP tool description |
 | 31 | Official MCP go-sdk | mark3labs/mcp-go | User choice |
 | 32 | modernc.org/sqlite | mattn/go-sqlite3 | No cgo |
@@ -581,23 +581,23 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 43 | Any language with an installed Piper voice is supported; EN and PL voices built into the image, others as files in `/work/voices`; no built-in default voice for other languages (v1.3) | Fixed EN + PL only, bundling many voices in the image | User approved; keeps the image small |
 | 44 | `explore_page` may overlap a running render (two Chromiums, CPU contention may jitter timing); no shared browser lock | Shared semaphore to serialize; reject explore during render | User choice. Offsets come from timestamps, so correctness holds. Revisit if timing jitter shows up. See ARCHITECTURE.md §6.2. |
 | 45 | `flock` lock file `.screencaster/render.lock` guards CLI against simultaneous MCP worker render. CLI fails fast, worker waits | No lock; CLI enqueues via SQLite | User choice. Kernel releases on crash. Keeps PRD rule that CLI has no queue or job record. See ARCHITECTURE.md §6.3. |
-| 46 | Recording t0 = monotonic timestamp just before recorded page creation; no trimming; fixed compensation only if M2 spike finds lead-in > ~100 ms | Trim lead-in with ffmpeg -ss | User choice. Fewer moving parts. See ARCHITECTURE.md §5. |
+| 46 | Recording t0 = monotonic timestamp just before recorded page creation; no trimming; fixed compensation only if M2 spike finds lead-in > ~100 ms | Trim lead-in with ffmpeg -ss | User choice. Fewer moving parts. See ARCHITECTURE.md §5. Superseded by ARCHITECTURE decision 69 (sync marker). |
 | 47 | `explore_page` snapshot = Playwright ARIA snapshot + derived selectors, with uniqueness check and `>> nth=N` for collisions | Screenshot + raw DOM; deprecated Accessibility snapshot | Supported API in playwright-go. Guarantees "selector found by explore works in render". Output format confirmed by spike S4 (ARCHITECTURE §17). |
 | 48 | MCP server: logs to stderr only, subprocess stdout/stderr captured, never inherited | Logs to stdout | Required for MCP stdio hygiene. See ARCHITECTURE.md §12. |
 | 49 | Narration clip duration read from WAV header, not ffprobe | Spawn ffprobe per clip | Avoids subprocess per clip. Piper emits PCM WAV, duration exact from header. See ARCHITECTURE.md §4. |
 | 50 | Constant 30 fps forced during transcode with `fps=30` filter / `-r 30` | Pass VFR through | Keeps video time equal to wall time for adelay offsets. See ARCHITECTURE.md §5. |
-| 51 | Commit `go.work` and `go.work.sum` | Ignore and generate in CI/Docker | One source of truth for CI, the image and contributors. |
+| 51 | Commit `go.work` and `go.work.sum` | Ignore and generate in CI/Docker | One source of truth for CI, the image and contributors. Superseded by ARCHITECTURE decision 67. |
 | 52 | Dev Docker image from M1; every `make` target runs in it | Host Go install | The host has only Docker; one toolchain everywhere. |
 | 53 | `spf13/cobra` for the CLI | std `flag` | User choice; documented deviation from the KISS rule in CODE_QUALITY.md. |
-| 54 | e2e tests in their own module `tests/e2e`, run locally with `make e2e`, not in CI | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. Deviates from ARCHITECTURE.md §13. |
-| 55 | Schema at `core/script/script.schema.json` | Root `schema/` | `go:embed` cannot reference parent directories. |
+| 54 | e2e tests in their own module `tests/e2e`, run locally with `make e2e`, not in CI | In-module e2e; e2e in CI | User choice; keeps CI fast and cheap. Deviates from ARCHITECTURE.md §13. Superseded by ARCHITECTURE decisions 67 (one module) and 68 (e2e in CI). |
+| 55 | Schema at `core/script/script.schema.json` (now `internal/domain/script/`) | Root `schema/` | `go:embed` cannot reference parent directories. |
 | 58 | Each demo is one self-contained YAML. `baseUrl` is required, `storageState` and `outputDir` are optional, and `screencaster.yaml` is removed (a warning is shown if one is present). Supersedes 15 | Optional `screencaster.yaml` fallback; paths relative to the demo file | User choice. No hidden project state; a public-site demo is one file and one command. Retargeting an environment means editing `baseUrl` (BR-010). |
 | 59 | `explore_page` takes an absolute `url` plus an optional `storageState`. The url is also the base for relative gotos in `actions` | Relative path plus a config `baseUrl` | User choice. No config to read; the explorer needs no change. |
 | 60 | No project-level voice defaults. Voice resolution is script, then built-in | Keep config `voices`; env-var defaults | Follows from 58. The script already carries per-demo `voices`, so a project level only added a second source. |
 | 61 | `storageState` is an inline object in the script (and in `explore_page`), not a path to a file. Supersedes the file form of 15, 58 and 59 | Path to a Playwright JSON file | User choice. A demo is then truly one self-contained file, with no second file to mount, check or leak a path from. The schema defines the shape; secrets now live in the demo, so it stays out of git. |
 | 62 | Every path in a demo resolves against the demo file's folder and must stay inside the working directory: `outputDir` (default `<demo dir>/output`) and a card `image`. Supersedes the "paths relative to the demo file" rejection in 58 | Paths relative to the working directory | User choice. A demo, its output and its pictures move together. The inside-the-work-dir rule stays because the script is LLM-written. A script outside the work dir has its default output outside too, so it needs an explicit absolute `outputDir` inside it. |
 | 63 | Every video gets a 3 s start card and a 3 s end card by default. The built-in card is an HTML page screenshotted by Chromium, joined to the recording by ffmpeg; `intro`/`outro` set a picture, text, time, or `false`. Moves the start and end cards from 10.2 into the MVP; interleaved slides stay post-MVP | Opt-in cards; ffmpeg `drawtext`; Go image rendering; cards recorded as browser pages | User choice. The output looks finished without an editing step. Chromium is already in the image, wraps long text and has the Polish glyphs. |
-| 64 | Render log lines are built in `core/renderer` and handed to `Request.Log`; the CLI prints them on stderr, the MCP worker writes them to `slog` with the job id | A `*slog.Logger` in the dependencies | One place for the wording, plain lines in the CLI (no `time=… level=…`), no stdout in the MCP server. |
+| 64 | Render log lines are built in `app/renderer` and handed to `Request.Log`; the CLI prints them on stderr, the MCP worker writes them to `slog` with the job id | A `*slog.Logger` in the dependencies | One place for the wording, plain lines in the CLI (no `time=… level=…`), no stdout in the MCP server. |
 
 ## 21. Open Questions
 None.

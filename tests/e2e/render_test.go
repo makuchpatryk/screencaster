@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"screencaster/core/provider"
+	"screencaster/internal/app/wire"
 )
 
 // markerText is the narration of the drift probe step. It starts with a
@@ -35,51 +35,31 @@ meta:
   title: E2E demo
   description: Every action plus the drift marker.
 steps:
-  - action: goto
-    url: /index.html
+  - goto: /index.html
     narration:
       en: Welcome to the fixture app.
       pl: Witaj w aplikacji testowej.
-  - action: wait
-    selector: "#logged-in"
-  - action: goto
-    url: /projects.html
-  - action: click
-    selector: role=button[name="New project"]
+  - wait: "#logged-in"
+  - goto: /projects.html
+  - click: role=button[name="New project"]
     narration:
       en: Open the form.
       pl: Otwórz formularz.
-  - action: fill
-    selector: input[name="name"]
-    value: Demo
-  - action: select
-    selector: select[name="visibility"]
-    value: private
-  - action: press
-    selector: input[name="name"]
-    key: Tab
-  - action: hover
-    selector: role=button[name="Create"]
-  - action: click
-    selector: role=button[name="Create"]
-  - action: wait
-    selector: "#toast"
-  - action: scroll
-    selector: "#footer"
-  - action: scroll
-    y: 0
-  - action: goto
-    url: /marker.html
-  - action: wait
-    ms: 1000
-  - action: press
-    selector: "#marker"
-    key: Enter
+  - fill: { selector: 'input[name="name"]', value: Demo }
+  - select: { selector: 'select[name="visibility"]', value: private }
+  - press: { key: Tab, selector: 'input[name="name"]' }
+  - hover: role=button[name="Create"]
+  - click: role=button[name="Create"]
+  - wait: "#toast"
+  - scroll: "#footer"
+  - scroll: { y: 0 }
+  - goto: /marker.html
+  - wait: 1000
+  - press: { key: Enter, selector: "#marker" }
     narration:
       en: ` + markerText + `
       pl: Bum. To jest znacznik.
-  - action: wait
-    ms: 1500
+  - wait: 1500
 `
 
 // failingScript is a format template too, with the same two arguments.
@@ -87,14 +67,10 @@ const failingScript = `name: e2e-fail
 baseUrl: %s
 %s
 steps:
-  - action: goto
-    url: /index.html
-  - action: wait
-    selector: "#logged-in"
-  - action: goto
-    url: /projects.html
-  - action: click
-    selector: "#does-not-exist"
+  - goto: /index.html
+  - wait: "#logged-in"
+  - goto: /projects.html
+  - click: "#does-not-exist"
 `
 
 var outputName = regexp.MustCompile(`^e2e-demo\.(en|pl)\.(\d{8}T\d{6}Z)\.mp4$`)
@@ -108,7 +84,7 @@ func cliBinary(t *testing.T) string {
 	}
 	bin := filepath.Join(t.TempDir(), "screencaster")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = "../../cli"
+	cmd.Dir = "../../cmd/screencaster"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build cli: %v\n%s", err, out)
 	}
@@ -169,7 +145,9 @@ func runCLI(t *testing.T, bin, dir string, args ...string) cliResult {
 }
 
 // FR-011, FR-009, FR-010, NFR-001, NFR-002 and the FR-007 drift bound, end to
-// end through the CLI binary with real Chromium, Piper and ffmpeg.
+// end through the CLI binary with real Chromium, Piper and ffmpeg. One
+// language, so the drift check is a ~45 s loop; the two-language checks
+// (FR-004 AC1, FR-010, NFR-001) are in TestRender_cli_enPl.
 func TestRender_cli(t *testing.T) {
 	bin := cliBinary(t)
 	dir := project(t, fixtureApp(t))
@@ -190,12 +168,38 @@ func TestRender_cli(t *testing.T) {
 			t.Errorf("log line %q missing from stderr:\n%s", want, en.stderr)
 		}
 	}
+	// Decision 69: the marker end, logged next to the drift, shows how close a
+	// late video start came to the 2 s hold. Decision 71: the narration line
+	// shows what the TTS pool saved.
+	for line := range strings.Lines(en.stderr) {
+		if strings.Contains(line, "sync marker ends at") || strings.Contains(line, "narration:") {
+			t.Log(strings.TrimSpace(line))
+		}
+	}
 	// Decision 62: the video lands next to the demo.
 	if got, want := filepath.Dir(enPaths[0]), filepath.Join(dir, "demos", "output"); got != want {
 		t.Errorf("video in %s, want %s", got, want)
 	}
 
-	// EN + PL (FR-004 AC1), timed for NFR-001.
+	assertDrift(t, enPaths[0], defaultCard) // the script has the default 3 s intro
+
+	if left, _ := filepath.Glob(filepath.Join(dir, ".screencaster", "tmp", "*")); len(left) > 0 {
+		t.Errorf("temp dirs left behind: %v", left)
+	}
+}
+
+// TestRender_cli_enPl: EN + PL (FR-004 AC1), timed for NFR-001, after an EN
+// render in the same project for the FR-010 no-overwrite check. Takes ~2 min.
+func TestRender_cli_enPl(t *testing.T) {
+	bin := cliBinary(t)
+	dir := project(t, fixtureApp(t))
+
+	en := runCLI(t, bin, dir, "render", "demos/e2e-demo.yaml")
+	if en.code != 0 {
+		t.Fatalf("default render exit %d\n%s", en.code, en.stderr)
+	}
+	enPaths := outputPaths(t, en.stdout, "en")
+
 	both := runCLI(t, bin, dir, "render", "demos/e2e-demo.yaml", "--lang", "en,pl")
 	if both.code != 0 {
 		t.Fatalf("en,pl render exit %d\n%s", both.code, both.stderr)
@@ -222,12 +226,6 @@ func TestRender_cli(t *testing.T) {
 	t.Logf("NFR-001: en,pl render took %v for %v of video (ratio %.2f)", both.elapsed.Round(time.Millisecond), total.Round(time.Millisecond), float64(both.elapsed)/float64(total))
 	if both.elapsed > 2*total {
 		t.Errorf("NFR-001: render took %v, more than 2x the %v of output", both.elapsed, total)
-	}
-
-	assertDrift(t, enPaths[0], defaultCard) // the script has the default 3 s intro
-
-	if left, _ := filepath.Glob(filepath.Join(dir, ".screencaster", "tmp", "*")); len(left) > 0 {
-		t.Errorf("temp dirs left behind: %v", left)
 	}
 }
 
@@ -266,10 +264,8 @@ meta:
   title: E2E demo
   description: Every action plus the drift marker.
 steps:
-  - action: goto
-    url: /marker.html
-  - action: wait
-    ms: 500
+  - goto: /marker.html
+  - wait: 500
 `
 
 // Decision 58: one file and one command. The work dir holds only the demo, so
@@ -375,7 +371,7 @@ func assertVideo(t *testing.T, path string) time.Duration {
 const defaultCard = 3 * time.Second
 
 // assertDrift compares the marker flash with the start of its narration clip
-// in the final MP4 (FR-007 AC asks ±100 ms; the test allows maxDrift). The clip's own leading silence is
+// in the final MP4 (FR-007 AC asks ±100 ms, which maxDrift is). The clip's own leading silence is
 // measured on a fresh synthesis of the same text and subtracted, so only the
 // placement error remains.
 func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
@@ -383,7 +379,7 @@ func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
 	clip := filepath.Join(t.TempDir(), "marker.wav")
 	// The image's environment names the provider; the built-in voice needs no
 	// project voices, so any folder serves as the work dir.
-	eng, err := provider.FromEnv(os.Getenv, t.TempDir())
+	eng, err := wire.TTS(os.Getenv, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,10 +400,13 @@ func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
 	}
 }
 
-// maxDrift is wider than the PRD's ±100 ms (FR-007): the WebM start is bimodal
-// and the fixed 90 ms lead-in compensation (ADR-46) is off in some runs, 125 ms
-// seen in e2e-runtime. Tighten it again once the lead-in is measured per run.
-const maxDrift = 150 * time.Millisecond
+// maxDrift is the PRD's ±100 ms (FR-007). Over 20 local renders with the sync
+// marker (decision 69) the drift was 25-33 ms in 13, 59-66 ms in 6 and 132 ms
+// in one. It sits on the 33 ms frame grid of the 30 fps output: the flash frame
+// is the first frame after the click paints, so most of the ~30 ms "bias" is the
+// measurement, not a placement error, and a constant would only tune the test.
+// The 132 ms run means a ~1 in 20 flake at this bound.
+const maxDrift = 100 * time.Millisecond
 
 var (
 	silenceStart = regexp.MustCompile(`silence_start: (-?[0-9.]+)`)

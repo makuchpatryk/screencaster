@@ -5,5 +5,4 @@ storageState:
     - name: session
       value: abc123
 steps:
-  - action: goto
-    url: /
+  - goto: /

@@ -7,5 +7,4 @@ intro:
 outro:
   title: See you next time
 steps:
-  - action: goto
-    url: /
+  - goto: /

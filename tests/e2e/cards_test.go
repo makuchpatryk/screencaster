@@ -24,10 +24,8 @@ meta:
   title: E2E demo
   description: Every action plus the drift marker.
 %ssteps:
-  - action: goto
-    url: /marker.html
-  - action: wait
-    ms: 500
+  - goto: /marker.html
+  - wait: 500
 `
 
 // frameAt decodes the video frame at `at`.

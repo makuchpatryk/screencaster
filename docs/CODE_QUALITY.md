@@ -18,7 +18,7 @@ Precedence: **KISS and YAGNI first** (internal tool, one developer, ≤ 10 video
 
 Prefer the boring solution. Add a dependency or abstraction only when the plain version has become a problem.
 
-- Standard library and OS first: `flock` for the render lock, `os.Rename` to publish, `go:embed` for the schema, `encoding/binary` for the WAV header, `os/exec` for Piper and ffmpeg. The TTS provider is a static `switch` in `provider.FromEnv`, no registry or plugin loading.
+- Standard library and OS first: `flock` for the render lock, `os.Rename` to publish, `go:embed` for the schema, `encoding/binary` for the WAV header, `os/exec` for Piper and ffmpeg. The TTS provider is a static `switch` in `wire.TTS`, no registry or plugin loading.
 - Short, single-purpose functions with early returns. Handle the error, then continue on the happy path.
 - Plain structs and slices. No ORM, DI container, plugin system or job framework. `database/sql` with a few queries is enough (ARCHITECTURE §10).
 - **Deviation:** `cobra` for the CLI (Decision 53, user choice). It is the only framework allowed; std `flag` would have been enough for one command.
@@ -31,8 +31,8 @@ Build for the PRD, not for what might come.
 - Delete code with no caller: unused functions, struct fields, config keys, schema properties.
 - Keep PRD §10.3 out: login steps, masking, other formats, cloud TTS, web UI, auto-deletion, CI-triggered renders, schema-only tool.
 - Keep PRD §10.2 out: slides between steps, overlays, multi-tenancy (the start and end cards are in, decision 63). No hooks "for later" beyond what ARCHITECTURE §15 already names.
-- No second TTS engine (the `provider.Engine` seam is ready for one), browser, storage backend or output format. Only languages are open-ended (BR-002).
-- `Recorder`, `Synthesizer`, `Assembler` and `Cards` interfaces (in `core/renderer`) and `Page`/`Session` (in `core/executor`/`core/recorder`) exist as test seams, not for swapping Chromium or ffmpeg. No interface without a test seam. **Deviation:** `provider.Engine` is also a deliberate swap seam for the TTS engine (Decision 65, user choice); it is two methods, with a static switch to pick the adapter.
+- No second TTS engine (the `tts.Engine` seam is ready for one), browser, storage backend or output format. Only languages are open-ended (BR-002).
+- `Recorder`, `Synthesizer`, `Assembler`, `Cards` and `Files` (in `app/renderer`), `Store` (in `app/jobs`) and `Page`/`Session` (in `domain/executor`/`domain/recorder`) exist as test seams, not for swapping Chromium, ffmpeg, SQLite or the disk. No interface without a test seam. **Deviation:** `tts.Engine` is also a deliberate swap seam for the TTS engine (Decision 65, user choice); it is two methods, with a static switch to pick the adapter.
 - No retries, backoff or configurable timeouts. BR-004: one 30 s timeout, then abort.
 - No scale design. One worker, one SQLite file, one render at a time (BR-008).
 
@@ -42,25 +42,27 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 
 | Knowledge | Lives in |
 |---|---|
-| Script format (fields, enums, limits) | `core/script/script.schema.json`, embedded in `core/script`. Same text feeds validation and the `render_video` tool description |
-| Cross-field script rules (narration per selected language, scroll/wait exclusivity) | `core/script`, one validate function |
+| Script format (fields, enums, limits) | `internal/domain/script/script.schema.json`, embedded in `domain/script`. Same text feeds validation and the `render_video` tool description |
+| Step format (one action key per step and its shape) | `$defs/step` in the schema; the `explore_page` input schema points at it instead of inferring one from Go types |
+| Cross-field script rules (narration per selected language) | `domain/script`, one validate function |
 | Language selection, override > script > `["en"]` (BR-002) | one function, called by CLI, MCP validation and worker |
-| Voice resolution rules (BR-011) | `core/voices`, over a provider's `Catalog` |
-| Built-in voices per language and Piper naming (`.onnx`, language from the name) | `core/provider/piper` (`Defaults`) |
-| Which TTS provider runs, and its binary and voice paths | `provider.FromEnv` selects; the provider's `providers/<name>/Dockerfile` ENV lines hold the paths |
-| Step semantics (FR-005) and URL resolution against `baseUrl` (BR-010) | `core/executor`, shared by render and `explore_page` |
-| Failure shape `{step, lang, action, target, message}` | `core/failure`, used by CLI output, MCP tool errors and `jobs.error_json` |
-| Output filename and timestamp format (FR-010) | one function in `core/renderer` |
-| Card text and the closing line per language | `core/card` (`HTML`, `Outro`); the intro/outro defaults come from `renderer.Prepare` |
+| Voice resolution rules (BR-011) | `domain/voices`, over a provider's `Catalog` |
+| Built-in voices per language and Piper naming (`.onnx`, language from the name) | `adapters/tts/piper` (`Defaults`) |
+| Which TTS provider runs, and its binary and voice paths | `wire.TTS` selects; the provider's `providers/<name>/Dockerfile` ENV lines hold the paths |
+| Step semantics (FR-005) and URL resolution against `baseUrl` (BR-010) | `domain/executor` (one type switch), shared by render and `explore_page` |
+| Failure shape `{step, lang, action, target, message}` | `domain/failure` (no JSON tags), used by CLI output and MCP tool errors; its stored JSON is a record in `adapters/sqlite`, its tool JSON an output type in `adapters/mcpserver`, both pinned by golden tests |
+| Output filename and timestamp format (FR-010) | one function in `app/renderer` |
+| Card text and the closing line per language | `domain/card` (`HTML`, `Outro`); the intro/outro defaults come from `renderer.Prepare` |
 | Path base of a demo (output folder, card images) | `renderer.Prepare`: the demo's folder, then the inside-the-work-dir check |
-| Render log wording | `core/renderer` (`Request.Log`); callers only choose where the lines go |
+| Render log wording | `app/renderer` (`Request.Log`); callers only choose where the lines go |
 | 30 s timeout, 25 cursor steps, 60 ms/char, 1920×1080, 30 fps | named constants in the owning package |
-| Job statuses and transitions | typed constants in `mcp/queue`. Nothing else compares status strings |
+| Job statuses and transitions | typed constants in `app/jobs`. Nothing else compares status strings |
 | Audience values | `script.Audiences`; a test keeps it equal to the schema enum |
+| How the real tools are wired (ffmpeg, recorder, cards, file system) | `wire.NewDeps`, called by both mains |
 
 - Derive, don't copy: tool description from the embedded schema, `get_options` voices from the directory scan, job `position` from a SQL count.
 - Extract on the third occurrence, and only if the copies change for the same reason.
-- Guard drift with tests: the example script in the tool description validates, built-in voice names (`piper.Defaults`) match the files baked into the image.
+- Guard drift with tests: the example script in the tool description validates and passes the `explore_page` input schema, built-in voice names (`piper.Defaults`) match the files baked into the image, every built-in voice language has a closing line.
 - The recorder and explorer both launch Chromium but differ in recording and visuals. Don't merge them. The executor's `Mode{Visuals}` is the one deliberate shared flag (ARCHITECTURE §7).
 
 ## Separation of concerns
@@ -69,26 +71,28 @@ Layout: ARCHITECTURE §3.
 
 | Package | Job | Must not |
 |---|---|---|
-| `core/script` | parse and validate input into typed values | start processes or touch the browser |
-| `core/support/*` | small shared helpers (today: `wav`, a clip's length); one concern per package | know about providers, languages, jobs or steps |
-| `core/voices`, `core/failure` | pure resolution and error types | do I/O or know a provider's file formats |
-| `core/card` | build the card page and closing line from text | do I/O, start a process or pick the language to render |
-| `core/provider/piper`, `core/assembler`, `core/browser` | wrap one external tool each (`core/provider` picks the adapter, `core/support/wav` reads a clip's length) | know about jobs, language policy or the queue |
-| `core/executor` | run one step | decide timing between steps or know about narration |
-| `core/recorder` | run one language's steps, record offsets (BR-003) | publish files or pick output names |
-| `core/renderer` | orchestrate the pipeline, publish outputs | contain tool flags or SQL |
-| `core/explorer` | explore one page | enqueue, record video or take the render lock |
-| `core/lock` | flock wrapper | know why it locks |
-| `cli` | parse args, print progress, map result to exit code | contain render logic |
-| `mcp/server` | MCP tools and prompt, map errors to tool errors | contain render logic or SQL |
-| `mcp/queue` | SQLite store and the single worker | import MCP SDK types |
+| `domain/script` | parse and validate input into typed values | start processes or touch the browser |
+| `domain/voices`, `domain/failure` | pure resolution and error types | do I/O, know a provider's file formats or carry JSON tags |
+| `domain/card` | build the card page and closing line from text | do I/O, start a process or pick the language to render |
+| `domain/executor` | run one step | decide timing between steps or know about narration |
+| `domain/recorder` | run one language's steps, record offsets (BR-003) | publish files, pick output names or launch a browser itself |
+| `app/renderer` | orchestrate the pipeline, publish outputs | contain tool flags or SQL, or import a tool package |
+| `app/explorer` | explore one page | enqueue, record video or take the render lock |
+| `app/jobs` | job shape, statuses, the single worker | open SQLite or import MCP SDK types |
+| `app/wire` | composition root: pick the TTS provider, map ports onto adapters | contain rules or render logic |
+| `adapters/tts/piper`, `adapters/assembler`, `adapters/browser` | wrap one external tool each (`adapters/tts/wav` reads a clip's length) | know about jobs, language policy or the queue |
+| `adapters/sqlite` | the jobs table and its stored JSON | import MCP SDK types or decide job transitions |
+| `adapters/mcpserver` | MCP tools and prompt, map errors to tool errors | contain render logic or SQL |
+| `adapters/lock`, `adapters/osfs` | flock wrapper; the real file system | know why they are used |
+| `cmd/screencaster` | parse args, print progress, map result to exit code | contain render logic or wire tools |
+| `cmd/screencaster-mcp` | open the store, start the worker and the server | contain render logic or wire tools |
 
-Hard rules:
-- `cli` → `core`, `mcp` → `core`. Never the reverse. `cli` never imports `mcp`.
-- `core` imports neither SQLite nor the MCP SDK.
-- Only `core/provider/piper`, `core/assembler` and `core/browser` call `os/exec` or playwright-go.
-- Domain rules (validation, language and voice resolution) live in `core`, never in `main` or a handler.
-- Paths (`outputDir`, card images) and `baseUrl` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself; `main` passes `os.Getenv` and the working directory to `provider.FromEnv`.
+Hard rules (ARCHITECTURE §3, enforced by depguard):
+- `domain` imports nothing from `app`, `adapters` or `cmd`; `app` (except `app/wire`) imports no adapter.
+- Only `adapters/tts/piper`, `adapters/assembler` and `adapters/browser` call `os/exec`; only `adapters/browser` calls playwright-go; only `adapters/sqlite` opens SQLite; only `adapters/mcpserver` and `cmd/screencaster-mcp` use the MCP SDK.
+- `cmd/screencaster` imports neither the MCP server nor the job store.
+- Domain rules (validation, language and voice resolution) live in `domain`, never in `main` or a handler.
+- Paths (`outputDir`, card images) and `baseUrl` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself; `main` passes `os.Getenv` and the working directory to `wire.TTS`.
 - `screencaster-mcp` never writes to stdout except protocol frames. Logs go to stderr (ARCHITECTURE §12).
 
 ## SOLID
@@ -99,15 +103,15 @@ Applied to packages, functions and small structs.
 
 **Open/closed.** Extend by data or table entry, not by editing working code.
 - New language = voice file in `/work/voices`, no code (FR-018).
-- New TTS provider = one adapter package, one `FromEnv` case, one image layer (ARCHITECTURE §15).
-- New step action = schema entry plus one case in the executor's single dispatch.
+- New TTS provider = one adapter package, one `wire.TTS` case, one image layer (ARCHITECTURE §15).
+- New step action = schema property under `$defs/step`, one action type in `domain/script`, one case in the executor's type switch.
 - New failure kind = a constructor for the shared `Failure`, not a new path through CLI and MCP.
 
 **Liskov substitution.** Fakes of `Recorder`, `Synthesizer`, `Assembler`, `Cards` and `Session` return the same error types, respect `ctx` cancellation and leave no files behind, like the real ones. The executor behaves identically in both modes except visuals, so an explore selector works in a render (FR-017 AC3).
 
 **Interface segregation.** Interfaces are small and declared by the consumer (`renderer` declares the 1–3 methods it needs). Functions take what they use: `voices.Resolve(langs, scriptVoices, catalog)` takes maps and a catalog, not the whole `Script`.
 
-**Dependency inversion.** `renderer` depends on interfaces, unit tests pass fakes. Time and run IDs are injected so tests get deterministic filenames. Wrappers take binary and voice paths as constructor arguments; the TTS provider comes from `provider.FromEnv(os.Getenv, ...)` with `getenv` injected. Wire by hand in `main`.
+**Dependency inversion.** `renderer` depends on interfaces, unit tests pass fakes. Time and run IDs are injected so tests get deterministic filenames. Wrappers take binary and voice paths as constructor arguments; the TTS provider comes from `wire.TTS(os.Getenv, ...)` with `getenv` injected. Wire by hand in `app/wire`, the one composition root.
 
 ## Law of Demeter
 
@@ -131,13 +135,13 @@ Go has no inheritance. The rule is about not rebuilding it.
 ## Working agreements
 
 - **Context.** Anything that blocks or spawns a process takes `ctx` first. Cancellation must close the browser and delete temp files (FR-008).
-- **Errors.** Return, don't panic. Wrap with `%w`. Step, TTS and assembly failures become `core/failure.Failure` before leaving `core`. Use `errors.Is/As`, never match message text. Messages the PRD specifies (`outputDir must stay inside the working directory: ../out`, `job not found: <id>`, `tts failed at step <n> (<lang>): …`) are reproduced exactly.
+- **Errors.** Return, don't panic. Wrap with `%w`. Step, TTS and assembly failures become `failure.Failure` before leaving `app`. Use `errors.Is/As`, never match message text. Messages the PRD specifies (`outputDir must stay inside the working directory: ../out`, `job not found: <id>`, `tts failed at step <n> (<lang>): …`) are reproduced exactly.
 - **Fail early.** Validate script, narration, voices and storageState before starting a browser or Piper (FR-002, BR-011).
 - **Cleanup.** Temp files go under `.screencaster/tmp/<runId>/` and are removed with `defer` on success and abort. Write to `outputDir` only in the final publish step. Never open an existing output for writing (BR-006).
 - **Subprocesses.** `exec.CommandContext`, stdout and stderr captured, never inherited. Keep the last lines of stderr for error messages.
 - **Determinism.** No LLM calls, no HTTP clients, nothing random in anything that affects output (BR-001, NFR-003).
-- **API surface.** `cli` and `mcp` are separate modules, so `core` packages are exported. Keep exported names few and documented.
-- **Comments.** Explain why, not what. Non-obvious choices (t0 before page creation, forced 30 fps) get one comment pointing to the ARCHITECTURE section or decision number.
+- **API surface.** Everything lives under `internal/`, so nothing is importable from outside the module. Inside it, keep exported names few and documented.
+- **Comments.** Explain why, not what. Non-obvious choices (t0 after the sync marker, forced 30 fps) get one comment pointing to the ARCHITECTURE section or decision number.
 - **Tests.** Table-driven, one behaviour per case, names state the rule (`TestLanguages_overrideBeatsScript`). Reference the BR/FR when a test enforces one.
 
 ## Enforcement
@@ -147,8 +151,8 @@ CI is as specified in PRD §18. `make lint`, `make vet` and `make test` run the 
 | Check | Guards |
 |---|---|
 | `golangci-lint` (with a `depguard` rule for the import boundaries above) | unused code, error handling, boundary rules |
-| `go test ./...` for each workspace module | `core` rules (resolution, validation, timing math), queue order and recovery, schema accepts the example script and rejects invalid samples |
-| `make e2e` in the dev image (local, not in CI, Decision 54) | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render |
+| `go test ./...` in the one module | domain and use-case rules (resolution, validation, timing math), queue order and recovery, schema accepts the example script and rejects invalid samples |
+| `make e2e` in the dev image (CI `e2e` job and local, Decision 68) | ffprobe (h264, 1920×1080, 30 fps, aac), drift, NFR-001 ratio, explore selector reused in a render |
 | `make image` + `make image-check` (CI `image` job) | base and provider image build, built-in voices (names from `piper.Defaults`, checked by `providers/piper/image-check.sh`) present |
 | `make e2e-runtime` (local) | the image's own binary, Chromium, Piper and ffmpeg render a video |
 
@@ -168,11 +172,13 @@ Everything not in this table is a review point.
 
 ## Known debt
 
-- `PLAYWRIGHT_GO_VERSION` in the `dev-base` stage of the `Dockerfile` repeats the playwright-go version in `core/go.mod`. Bump both together (the runtime image reads it from `go.mod`).
+- `PLAYWRIGHT_GO_VERSION` in the `dev-base` stage of the `Dockerfile` repeats the playwright-go version in the root `go.mod`. Bump both together (the runtime image reads it from `go.mod`).
+- The playwright-go module path is `github.com/mxschmitt/playwright-go`, the one its `go.mod` declares (Decision 66). Re-check on every bump that it has not moved to `playwright-community`.
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.
-- The fixed 90 ms lead-in (ADR-46) is wrong when the WebM start lands in its late mode (~590 ms, ARCHITECTURE §17.1), so narration plays late in some renders. The e2e drift bound is ±150 ms, not FR-007's ±100 ms (`maxDrift`). Measure the lead-in per recording, then tighten the bound.
+- Sync marker drift (Decision 69, ARCHITECTURE §17.1): over 20 renders the e2e drift was 25–66 ms in 19 and 132 ms in one, on the 33 ms frame grid. The one run above `maxDrift` (±100 ms, FR-007) means the CI `e2e` job can flake about 1 run in 20. The plan's ±40 ms is not reached and no bias constant is applied (the ~30 ms is mostly the measurement). Find the cause of the outlier or raise the recording frame rate, then tighten the bound.
+- The CI `e2e` job has no Docker layer cache: buildx's cache needs a driver that cannot see the locally built `screencaster-dev-base`. Every run builds both images. Add a registry-backed cache if the minutes hurt.
+- `synthesizeAll` has pool machinery (semaphore, lowest-failure tracking) that `ttsWorkers = 1` never uses (Decision 71). It is a KISS/YAGNI cost kept for a longer script that may show the 1.3× speedup; delete it if none does.
 - `explore_page` may overlap a render (Decision 44). If timing jitters, add one shared browser semaphore at the launch point.
-- `modernc.org/sqlite` is pinned to v1.50.0 in `mcp/go.mod`, the newest release that builds on Go 1.25 (v1.60 needs 1.26). Bump it together with the Go version.
-- `cli/main.go` and `mcp/main.go` both wire ffmpeg, the recorder, the `cards` adapter (`browser.Shot` from `renderer.Shot`) and `renderer.Deps` by hand. That is two copies; extract a shared constructor on the third. (The TTS part is already one shared call, `provider.FromEnv`.)
+- `modernc.org/sqlite` is pinned to v1.50.0 in `go.mod`, the newest release that builds on Go 1.25 (v1.60 needs 1.26). Bump it together with the Go version.
 - The `>> nth=<i>` suffix from `explore_page` assumes the matches appear in the snapshot in DOM order. It holds for ordinary pages; a page that reorders elements visually only is not covered.
-- `explore_page` actions go through `script.ValidateSteps`, so a `fill` with an empty `value` is reported as a missing `value` (the empty string is dropped when the steps are encoded). Clearing a field is not needed to find selectors.
+- An MCP job snapshots only its YAML (`jobs.script`). Card images and anything else the demo points at are read again when the job runs, so editing them while a job waits does change that job.

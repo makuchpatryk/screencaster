@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"screencaster/core/browser"
-	"screencaster/core/explorer"
-	"screencaster/core/script"
+	"screencaster/internal/adapters/browser"
+	"screencaster/internal/app/explorer"
+	"screencaster/internal/domain/script"
 )
 
 func newExplorer() explorer.Explorer {
@@ -47,7 +47,7 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 		BaseURL:      base + "/projects.html",
 		StorageState: fixtureState,
 		URL:          base + "/projects.html",
-		Actions:      []script.Step{{Action: "click", Selector: `role=button[name="New project"]`}},
+		Actions:      []script.Step{{Action: script.Click{Selector: `role=button[name="New project"]`}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -63,11 +63,11 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 	create := selectorFor(t, out.Snapshot, "button", "Create")
 
 	body := "name: explored\nbaseUrl: " + base + "\n" + stateYAML + "\nsteps:\n" +
-		"  - {action: goto, url: /projects.html}\n" +
-		"  - {action: click, selector: '" + newProject + "'}\n" +
-		"  - {action: fill, selector: '" + name + "', value: Demo}\n" +
-		"  - {action: click, selector: '" + create + "'}\n" +
-		"  - {action: wait, selector: '#toast'}\n"
+		"  - goto: /projects.html\n" +
+		"  - click: '" + newProject + "'\n" +
+		"  - fill: {selector: '" + name + "', value: Demo}\n" +
+		"  - click: '" + create + "'\n" +
+		"  - wait: '#toast'\n"
 	if err := os.WriteFile(filepath.Join(dir, "demos", "explored.yaml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
 		{"Delete", "delete-1"}, // selectorFor takes the first "Delete" line
 	} {
 		sel := selectorFor(t, out.Snapshot, "button", c.name)
-		in.Actions = []script.Step{{Action: "click", Selector: sel}}
+		in.Actions = []script.Step{{Action: script.Click{Selector: sel}}}
 		got, err := ex.Explore(context.Background(), in)
 		if err != nil {
 			t.Fatalf("click %s: %v", sel, err)
@@ -119,7 +119,7 @@ func TestExplore_failedActionKeepsSnapshot(t *testing.T) {
 		BaseURL:      base + "/projects.html",
 		StorageState: fixtureState,
 		URL:          base + "/projects.html",
-		Actions:      []script.Step{{Action: "click", Selector: "#does-not-exist"}},
+		Actions:      []script.Step{{Action: script.Click{Selector: "#does-not-exist"}}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "step 1 click #does-not-exist") {
 		t.Fatalf("error = %v, want step 1 click #does-not-exist", err)

@@ -4,5 +4,4 @@ outro:
   image: logo.png
   subtitle: Bye
 steps:
-  - action: goto
-    url: /
+  - goto: /

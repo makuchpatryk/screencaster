@@ -1,0 +1,32 @@
+name: create-project
+baseUrl: http://host.docker.internal:3000
+storageState:                  # optional; omit for a public site
+  cookies:
+    - name: session
+      value: <session cookie value>
+      domain: host.docker.internal
+      path: /
+languages: [en, pl]
+meta:
+  title: How to create a project
+  description: Create a project from the projects page.
+  audience: release-notes
+steps:
+  - goto: /projects
+    narration:
+      en: This is the projects page.
+      pl: To jest strona projektów.
+  - click: role=button[name="New project"]
+    narration:
+      en: Click the New project button.
+      pl: Kliknij przycisk Nowy projekt.
+  - fill: { selector: 'input[name="name"]', value: My Project }
+  - select: { selector: 'select[name="visibility"]', value: private }
+  - hover: role=button[name="Create"]
+  - press: { key: Enter, selector: 'input[name="name"]' }
+    narration:
+      en: Press Enter to create the project.
+      pl: Naciśnij Enter, aby utworzyć projekt.
+  - wait: "#toast-success"
+  - scroll: { y: 400 }
+  - wait: 1000

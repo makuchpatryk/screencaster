@@ -4,13 +4,11 @@ name: silent-narration
 baseUrl: http://host.docker.internal:3000
 languages: [en, pl]
 steps:
-  - action: goto
-    url: /projects
+  - goto: /projects
     narration:
       en: ""
       pl: ""
-  - action: wait
-    ms: 500
+  - wait: 500
     narration:
       en: Welcome to the projects page.
       pl: ""

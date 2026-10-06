@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "screencaster demo script",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "baseUrl", "steps"],
+  "properties": {
+    "name": {
+      "description": "Used in output filenames: <name>.<lang>.<timestamp>.mp4",
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,64}$"
+    },
+    "baseUrl": {
+      "description": "Absolute http(s) URL of the app. Relative goto URLs resolve against it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "storageState": {
+      "description": "Session the browser starts with, in the shape of Playwright's context.storageState(): cookies and localStorage. Omit for a fresh, logged-out session. It holds secrets: keep the script out of git.",
+      "$ref": "#/$defs/storageState"
+    },
+    "outputDir": {
+      "description": "Where MP4s are written, relative to the demo file's folder and inside the working directory. Default output.",
+      "type": "string",
+      "minLength": 1
+    },
+    "languages": {
+      "description": "Languages to render, in order. Default [\"en\"]. A render-time override wins. Every narrated step needs narration text for each selected language.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/lang" }
+    },
+    "voices": {
+      "description": "Piper voice name per language code. Falls back to the built-in en/pl voices.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/lang" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "meta": {
+      "description": "Written to the MP4 title and comment tags.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "audience": { "enum": ["release-notes", "sales", "marketing"] }
+      }
+    },
+    "intro": {
+      "description": "Card shown for 3 s before the recording. Omit for the built-in card (title and description), false for none.",
+      "$ref": "#/$defs/bookend"
+    },
+    "outro": {
+      "description": "Card shown for 3 s after the recording. Omit for the built-in card (closing line and title), false for none.",
+      "$ref": "#/$defs/bookend"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "bookend": {
+      "description": "Start or end card: false for none, or an object. Without image the built-in card is drawn from title and subtitle.",
+      "if": { "type": "object" },
+      "then": {
+        "additionalProperties": false,
+        "properties": {
+          "image": {
+            "description": "Path of a PNG or JPEG, relative to the demo file's folder. Shown full-frame instead of the built-in card, so it excludes title and subtitle.",
+            "type": "string",
+            "pattern": "(?i)\\.(png|jpe?g)$"
+          },
+          "title": { "type": "string", "maxLength": 120 },
+          "subtitle": { "type": "string", "maxLength": 500 },
+          "durationMs": { "description": "How long the card is shown. Default 3000.", "type": "integer", "minimum": 500, "maximum": 10000 }
+        },
+        "allOf": [
+          { "not": { "required": ["image", "title"] } },
+          { "not": { "required": ["image", "subtitle"] } }
+        ]
+      },
+      "else": { "const": false }
+    },
+    "storageState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cookies": { "type": "array", "items": { "$ref": "#/$defs/cookie" } },
+        "origins": { "type": "array", "items": { "$ref": "#/$defs/origin" } }
+      }
+    },
+    "cookie": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "anyOf": [{ "required": ["url"] }, { "required": ["domain", "path"] }],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "string" },
+        "url": { "description": "Alternative to domain and path", "type": "string", "minLength": 1 },
+        "domain": { "description": "Prefix with a dot to cover subdomains", "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "expires": { "description": "Unix time in seconds; -1 for a session cookie", "type": "number" },
+        "httpOnly": { "type": "boolean" },
+        "secure": { "type": "boolean" },
+        "sameSite": { "enum": ["Strict", "Lax", "None"] }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": { "type": "string", "minLength": 1 },
+        "localStorage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "value": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "lang": {
+      "description": "Lowercase ISO 639-1 language code",
+      "type": "string",
+      "pattern": "^[a-z]{2}$"
+    },
+    "selector": {
+      "description": "Playwright selector string: CSS, role=..., text=...",
+      "type": "string",
+      "minLength": 1
+    },
+    "key": {
+      "description": "Playwright key name, e.g. Enter",
+      "type": "string",
+      "minLength": 1
+    },
+    "selectorValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector", "value"],
+      "properties": {
+        "selector": { "$ref": "#/$defs/selector" },
+        "value": { "type": "string" }
+      }
+    },
+    "step": {
+      "description": "One action, written as its key (goto, click, fill, select, press, hover, scroll, wait), plus optional narration. Exactly one action per step.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "narration": {
+          "description": "Spoken text per language code. Must contain every selected language; an empty string keeps the step silent in that language. Text for unselected languages is ignored.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/lang" },
+          "additionalProperties": { "type": "string", "maxLength": 1000 }
+        },
+        "goto": {
+          "description": "Path relative to baseUrl, or an absolute http(s) URL used as-is",
+          "type": "string",
+          "minLength": 1
+        },
+        "click": { "$ref": "#/$defs/selector" },
+        "hover": { "$ref": "#/$defs/selector" },
+        "fill": { "description": "Type value into the field; an empty value clears it", "$ref": "#/$defs/selectorValue" },
+        "select": { "description": "Pick the option with this value or label", "$ref": "#/$defs/selectorValue" },
+        "press": {
+          "description": "A key name, or { key, selector } to press it on that element",
+          "if": { "type": "string" },
+          "then": { "$ref": "#/$defs/key" },
+          "else": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key"],
+            "properties": {
+              "key": { "$ref": "#/$defs/key" },
+              "selector": { "$ref": "#/$defs/selector" }
+            }
+          }
+        },
+        "scroll": {
+          "description": "A selector to scroll into view, or { y } to scroll the window to y px",
+          "if": { "type": "string" },
+          "then": { "$ref": "#/$defs/selector" },
+          "else": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["y"],
+            "properties": { "y": { "type": "integer" } }
+          }
+        },
+        "wait": {
+          "description": "Milliseconds to sleep (an integer), or a selector to wait for until visible",
+          "if": { "type": "integer" },
+          "then": { "minimum": 1, "maximum": 30000 },
+          "else": { "$ref": "#/$defs/selector" }
+        }
+      },
+      "if": { "required": ["narration"] },
+      "then": { "minProperties": 2, "maxProperties": 2 },
+      "else": { "minProperties": 1, "maxProperties": 1 }
+    }
+  }
+}

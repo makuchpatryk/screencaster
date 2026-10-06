@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"screencaster/core/browser"
-	"screencaster/core/recorder"
-	"screencaster/core/script"
+	"screencaster/internal/adapters/browser"
+	"screencaster/internal/domain/recorder"
+	"screencaster/internal/domain/script"
 )
 
 // fixtureApp serves testdata/fixture-app and returns its base URL
@@ -51,6 +51,7 @@ func newRecorder(t *testing.T, launched *time.Time) recorder.Recorder {
 			BaseURL:      o.BaseURL,
 			StorageState: o.StorageState,
 			VideoDir:     o.VideoDir,
+			Marker:       true,
 			Visuals:      true,
 		})
 		if err != nil {

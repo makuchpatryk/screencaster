@@ -4,5 +4,4 @@ intro:
   image: logo.png
   title: Hello
 steps:
-  - action: goto
-    url: /
+  - goto: /

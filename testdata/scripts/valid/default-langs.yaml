@@ -2,9 +2,7 @@
 name: default-langs
 baseUrl: http://host.docker.internal:3000
 steps:
-  - action: goto
-    url: /projects
+  - goto: /projects
     narration:
       en: Welcome to the projects page.
-  - action: click
-    selector: role=button[name="New project"]
+  - click: role=button[name="New project"]
