@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"screencaster/internal/adapters/lock"
@@ -41,6 +42,32 @@ func TestRun_langFlagOverridesScript(t *testing.T) { // FR-011, BR-002
 				t.Errorf("request = %+v", got)
 			}
 		})
+	}
+}
+
+func TestRun_versionFlagPrintsBuildVersion(t *testing.T) { // release distribution
+	old := version
+	t.Cleanup(func() { version = old })
+	version = "9.9.9"
+
+	called := false
+	fake := func(context.Context, renderer.Request) ([]renderer.Output, error) {
+		called = true
+		return nil, nil
+	}
+	var stdout, stderr bytes.Buffer
+	// renderWith(noEnv) has no provider: --version must not need one.
+	for name, render := range map[string]renderFunc{"fake": fake, "no provider": renderWith(noEnv)} {
+		stderr.Reset()
+		if code := run(context.Background(), []string{"--version"}, t.TempDir(), render, &stdout, &stderr); code != 0 {
+			t.Fatalf("%s: exit %d, stderr %q", name, code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "9.9.9") { // cobra prints to SetOut(stderr)
+			t.Errorf("%s: stderr = %q, want it to contain 9.9.9", name, stderr.String())
+		}
+	}
+	if called || stdout.Len() != 0 {
+		t.Errorf("--version rendered (%v) or wrote stdout %q", called, stdout.String())
 	}
 }
 

@@ -1,0 +1,86 @@
+name: release
+
+# Manual only (decision 76): run it from a green main with the version to ship.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, X.Y.Z (tag vX.Y.Z)"
+        required: true
+        type: string
+
+permissions:
+  contents: write # the tag and the Release
+  packages: write # the image in GHCR
+
+env:
+  VERSION: ${{ inputs.version }}
+  IMAGE: ghcr.io/makuchpatryk/screencaster
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check the version
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "version must be X.Y.Z, got '$VERSION'"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      # A tag at another commit would make the Release describe code that was
+      # not built here. Re-running for the same commit is fine.
+      - name: Check the tag
+        run: |
+          tagged=$(git ls-remote origin "refs/tags/v$VERSION" "refs/tags/v$VERSION^{}" | awk '{print $1}' | tail -n 1)
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "tag v$VERSION already points at $tagged, this run is at $GITHUB_SHA; move or delete the tag first"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Static binaries (the root Dockerfile builds them the same way); the
+      # version reaches both mains through one -X flag. The playwright CLI comes
+      # from the go.mod version and ships too: the binaries cannot fetch their
+      # driver and Chromium without it, and a user without Go cannot build it.
+      - name: Build the binaries
+        run: |
+          mkdir dist
+          for arch in amd64 arm64; do
+            export GOOS=linux GOARCH=$arch CGO_ENABLED=0
+            go build -trimpath -ldflags "-X main.version=$VERSION" -o "build/$arch/" ./cmd/...
+            go build -trimpath -o "build/$arch/" github.com/mxschmitt/playwright-go/cmd/playwright
+            tar -C "build/$arch" -czf "dist/screencaster_${VERSION}_linux_${arch}.tar.gz" screencaster screencaster-mcp playwright
+          done
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Piper is the only provider, so the tags carry no provider suffix.
+      - name: Build and check the image
+        run: |
+          make image VERSION="$VERSION"
+          make image-check
+
+      - name: Push the image
+        run: |
+          for tag in "$VERSION" latest; do
+            docker tag screencaster:piper "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+          done
+
+      # Last, so a failed build never leaves a half-published Release.
+      - name: Create the Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v$VERSION" dist/*.tar.gz dist/SHA256SUMS \
+            --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes

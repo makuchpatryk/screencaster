@@ -7,6 +7,10 @@ IMAGE     := screencaster
 PROVIDER     ?= piper
 PROVIDER_DIR := providers/$(PROVIDER)
 
+# Reported by `screencaster --version` and the MCP server. The release workflow
+# passes the tag's version; a local build stays `dev` (ARCHITECTURE §12).
+VERSION ?= dev
+
 # --user keeps files created by the container owned by the caller.
 DEV_RUN := docker run --rm --user $(shell id -u):$(shell id -g) \
 	-v $(CURDIR):/src -v screencaster-go-cache:/cache $(DEV_IMAGE)
@@ -33,7 +37,7 @@ image: image-base
 # The provider-free base: Chromium, ffmpeg and the binaries, no TTS. Every
 # provider's runtime stage builds on it.
 image-base:
-	docker build --target runtime-base -t $(IMAGE)-base .
+	docker build --target runtime-base --build-arg VERSION=$(VERSION) -t $(IMAGE)-base .
 
 # Each provider owns its check (the built-in voices, for Piper), run against the
 # image `make image` tagged.

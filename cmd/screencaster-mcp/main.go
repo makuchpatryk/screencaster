@@ -26,8 +26,10 @@ import (
 	"screencaster/internal/app/wire"
 )
 
-// version is reported to MCP clients.
-const version = "0.1.0"
+// version is reported to MCP clients. A release build sets it with
+// -ldflags "-X main.version=X.Y.Z" (ARCHITECTURE §12), which cannot set a
+// const.
+var version = "dev"
 
 // Files under <work>/.screencaster (ARCHITECTURE §11). The TTS provider and
 // its paths come from the image's environment (app.TTS).

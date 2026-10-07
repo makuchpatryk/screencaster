@@ -56,9 +56,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd cmd
 COPY internal internal
+# The release workflow passes the version (ARCHITECTURE §12); `dev` otherwise.
+ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     mkdir /out \
-    && CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/... \
+    && CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/ ./cmd/... \
     && go build -o /out/playwright github.com/mxschmitt/playwright-go/cmd/playwright
 
 # runtime-base: everything but a TTS provider. Runs as root with the project

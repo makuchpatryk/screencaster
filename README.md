@@ -6,6 +6,37 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
 
 *This demo was made with screencaster itself.*
 
+## Install
+
+Pick a version on the [Releases](https://github.com/makuchpatryk/screencaster/releases) page; `screencaster --version` reports it (`dev` for a local build).
+
+**Docker (supported path).** The image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg:
+
+```bash
+docker pull ghcr.io/makuchpatryk/screencaster:latest      # or :X.Y.Z
+docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway \
+  -v $(pwd):/work ghcr.io/makuchpatryk/screencaster screencaster render demos/my-demo.yaml
+```
+
+The image is linux/amd64 only (Piper is pinned to its x86_64 build), so arm64 hosts run it under emulation. `compose.yaml` and the MCP example below use the local name `screencaster`; after a pull, `docker tag ghcr.io/makuchpatryk/screencaster:latest screencaster` makes it so (compose wants `screencaster:piper`).
+
+**Native binaries (linux amd64 and arm64).** Each release has `screencaster_X.Y.Z_linux_<arch>.tar.gz` with `screencaster`, `screencaster-mcp` and `playwright`, plus `SHA256SUMS` (`sha256sum -c SHA256SUMS`). The binaries do not bring their tools. Checked from scratch on `debian:bookworm-slim` (amd64); arm64 is built but not tested. You need:
+
+1. **Piper and voices.** Take the Piper release and the voice files from the `piper` stage of [`providers/piper/Dockerfile`](providers/piper/Dockerfile), which holds the versions and checksums. Put the voices (each an `.onnx` plus an `.onnx.json`, the names the Dockerfile downloads) in one folder. Both binaries refuse to run without these variables:
+   ```bash
+   export SCREENCASTER_TTS=piper
+   export SCREENCASTER_PIPER_BIN=/opt/piper/piper
+   export SCREENCASTER_PIPER_VOICES=/opt/piper/voices
+   ```
+2. **ffmpeg** (with `ffprobe`) on `PATH`.
+3. **Playwright driver and Chromium.** The binaries do not fetch them themselves; without them a render fails with `please install the driver ... first`. Run the bundled CLI once, as the user who will render; `--with-deps` installs Chromium's system libraries and needs root:
+   ```bash
+   ./playwright install --with-deps chromium
+   ```
+   It stores the driver in `~/.cache/ms-playwright-go` and Chromium in `~/.cache/ms-playwright`, where the binaries look by default. To use other folders, set `PLAYWRIGHT_DRIVER_PATH` and `PLAYWRIGHT_BROWSERS_PATH` for both the install and the render.
+
+Then `./screencaster render demos/my-demo.yaml`, as in step 4 below. Docker needs none of this.
+
 ## Quick start
 
 1. **Clone and build** (Go 1.25, one module):

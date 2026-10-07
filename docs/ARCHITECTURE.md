@@ -290,10 +290,11 @@ stateDiagram-v2
 
 - **Base plus provider layer (Decision 65).** The root `Dockerfile` names no provider: `dev-base` (toolchain for `make`), `build` (static binaries, `go build ./cmd/...` from the root module) and `runtime-base` (both binaries, Chromium, ffmpeg, no TTS). Each provider is a folder `providers/<name>/` with its own `Dockerfile` whose `dev` and `runtime` stages build `FROM` those bases (`DEV_BASE`, `RUNTIME_BASE` build args) and set the provider ENV, plus an `image-check.sh`. `providers/piper` also holds the `piper` fetch stage (Piper + voices, checksum-pinned), shared by its `dev` and `runtime`.
 - **Build order.** `make dev-image` builds `screencaster-dev-base`, then `screencaster-dev` (tags `:<provider>` and latest). `make image` builds `screencaster-base`, then `screencaster:<provider>` and `screencaster` (latest). `PROVIDER` defaults to `piper`. `compose.yaml` only runs the built image, since compose cannot chain the two builds.
-- **Provider selection.** The image sets `SCREENCASTER_TTS` (and the provider's own variables: `SCREENCASTER_PIPER_BIN`, `SCREENCASTER_PIPER_VOICES`). `screencaster-mcp` calls `wire.TTS` at startup; the CLI calls it when a render starts, so `--help` and `version` work without a provider. Either way it fails with a clear message, before any render work, when the name is unset or unknown or the Piper binary is missing. No image path lives in Go code.
+- **Provider selection.** The image sets `SCREENCASTER_TTS` (and the provider's own variables: `SCREENCASTER_PIPER_BIN`, `SCREENCASTER_PIPER_VOICES`). `screencaster-mcp` calls `wire.TTS` at startup; the CLI calls it when a render starts, so `--help` and `--version` work without a provider. Either way it fails with a clear message, before any render work, when the name is unset or unknown or the Piper binary is missing. No image path lives in Go code.
 - Voice discovery belongs to the provider. The Piper adapter scans the image's voice folder and `/work/voices` on every call; the language is the voice name up to the first `_` (FR-018).
 - `--add-host=host.docker.internal:host-gateway` lets a `baseUrl` reach the host app on Linux (Decision 27). The container runs as root, so output files are root-owned.
 - **Stdio hygiene.** MCP uses stdout for protocol frames, so all logging goes to stderr and subprocess output (Piper, ffmpeg, the Playwright driver) is captured, never inherited. A stray byte on stdout corrupts the session.
+- **Release (Decision 76).** The `release` workflow is started by hand with a version `X.Y.Z`. It cross-compiles `screencaster`, `screencaster-mcp` and the `playwright` CLI for linux amd64 and arm64 into two tarballs plus `SHA256SUMS`, runs `make image VERSION=X.Y.Z` and `make image-check`, pushes `ghcr.io/makuchpatryk/screencaster:X.Y.Z` and `:latest`, and creates the GitHub Release last, so a failed build leaves no half-published release. The version reaches both mains through one `-X main.version` flag (`var version = "dev"` in each); the `VERSION` build arg and `make` variable carry it into the `build` stage. The image is amd64 only (Piper is pinned to `piper_linux_x86_64` in `providers/piper/Dockerfile`); the native binaries need the provider variables, ffmpeg and Chromium installed by the user (README, Install).
 - Go tooling runs in the dev image (Decision 52); `make image-check` runs the provider's own `image-check.sh` (for Piper: the built-in voices are in the image).
 
 ## 13. Testing strategy
@@ -304,7 +305,7 @@ stateDiagram-v2
 | Integration | SQLite store, lock semantics, MCP wiring over an in-memory transport | `go test` |
 | E2E | fixture app → real render (EN, EN+PL), output format, drift, duration ratio (NFR-001), an `explore_page` selector used in a render; a screenshots run (sizes per capture area, annotation pixels, no overlay leak, overwrite and stale removal) | `make e2e` in the dev image; `make e2e-runtime` runs the CLI tests against the runtime image (Decisions 54, 56, 68) |
 
-CI runs lint, vet and `go test -race` (one `check` job), an image build (`image`) and the e2e suite in the dev image (`e2e`, Decision 68). The e2e job has no Docker layer cache, so every run builds the images.
+CI runs lint, vet and `go test -race` (one `check` job), an image build (`image`) and the e2e suite in the dev image (`e2e`, Decision 68). The e2e job has no Docker layer cache, so every run builds the images. The manual `release` workflow (§12) runs `make image-check` but not lint, tests or e2e: dispatch it from a green `main`.
 
 ## 14. Security notes
 
@@ -322,7 +323,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61 and 65–71 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61, 65–71 and 76 are only here.
 
 | # | Decision | Why |
 |---|----------|-----|
@@ -358,6 +359,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 
 | 73 | Screenshots publish to `<outputDir>/<name>/screenshots/NN.png`, overwritten on rerun; stale `NN.png` removed, other files kept. Exception to BR-006 and §4 rule 5 | Timestamped run folder | User choice. Stable paths for docs and READMEs that embed the images. |
 | 74 | Annotations (box, arrow, label, dim) are a DOM overlay in document coordinates, injected before the capture and removed after; opt-in per step | Go image post-processing | User choice. Chromium already renders the text and glyphs; no new dependency. |
 | 75 | `domain/shooter` runs a screenshots run and intercepts `screenshot` steps; the executor is unchanged; the renderer reaches it through a `Shooter` port wired in `app/wire`. `take_screenshots` reuses the queue, worker, lock and `get_render_status`; no job-kind column | `Page.Screenshot` plus an executor case; the capture loop in `adapters/browser`; a separate queue | The executor stays file-agnostic and its fakes untouched; step semantics stay in one place; the renderer branches on the script type, so the worker needs no change. |
+| 76 | Releases are cut by hand: the `release` workflow takes a version, builds linux amd64 and arm64 tarballs (`screencaster`, `screencaster-mcp`, `playwright`) with plain `go build`, pushes an amd64-only image to GHCR and creates the GitHub Release last. The version is injected once by `-ldflags -X main.version`; native binaries need Piper, ffmpeg and Chromium installed by the user | GoReleaser; tag-push or per-commit triggers; a multi-arch image; extracting binaries from the Docker `build` stage; a `version` subcommand | User choice for the manual trigger, the amd64 image, `--version` and the shipped `playwright` CLI. Two binaries and one OS do not need a release tool; Piper is pinned to x86_64, so an arm64 image would be untested by `make e2e-runtime`; the binaries cannot fetch their driver and Chromium, and a user without Go cannot build the CLI. |
 
 ## 17. Open items for spikes
 

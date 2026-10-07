@@ -26,6 +26,7 @@ func run(ctx context.Context, args []string, workDir string, render renderFunc, 
 	root := &cobra.Command{
 		Use:           "screencaster",
 		Short:         "Render demo scripts into narrated MP4 videos",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

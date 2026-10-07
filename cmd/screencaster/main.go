@@ -22,6 +22,10 @@ import (
 // renderLockFile is the lock shared with the MCP worker (ARCHITECTURE §6.3).
 const renderLockFile = ".screencaster/render.lock"
 
+// version is shown by --version. A release build sets it with
+// -ldflags "-X main.version=X.Y.Z" (ARCHITECTURE §12).
+var version = "dev"
+
 func main() {
 	wd, err := os.Getwd()
 	if err != nil {

@@ -2,8 +2,7 @@
 
 ## Commits
 
-- **Subject line:** Short (≤50 chars), imperative mood
-- **Body:** Wrap at 72 chars (standard Git)
+- **One line only:** subject line, short (≤50 chars), imperative mood, no body
 - **No co-author line** — skip `Co-Authored-By: ...`
 
 Examples:
