@@ -18,7 +18,7 @@ Precedence: **KISS and YAGNI first** (internal tool, one developer, ≤ 10 video
 
 Prefer the boring solution. Add a dependency or abstraction only when the plain version has become a problem.
 
-- Standard library and OS first: `flock` for the render lock, `os.Rename` to publish, `go:embed` for the schema, `encoding/binary` for the WAV header, `os/exec` for Piper and ffmpeg. The TTS provider is a static `switch` in `wire.TTS`, no registry or plugin loading.
+- Standard library and OS first: `flock` for the render lock, `os.Rename` to publish, `go:embed` for the schema, `encoding/binary` for the WAV header, `os/exec` for Piper and ffmpeg. The TTS provider is a static `switch` in `wire.TTS`, no registry or plugin loading. `screencaster setup` is the same: a fixed list of five pieces and `apt-get`, no installer script, package manager abstraction or distro detection beyond "apt is on PATH" (decision 77).
 - Short, single-purpose functions with early returns. Handle the error, then continue on the happy path.
 - Plain structs and slices. No ORM, DI container, plugin system or job framework. `database/sql` with a few queries is enough (ARCHITECTURE §10).
 - **Deviation:** `cobra` for the CLI (Decision 53, user choice). It is the only framework allowed; std `flag` would have been enough for one command.
@@ -33,7 +33,8 @@ Build for the PRD, not for what might come.
 - Keep PRD §10.2 out: slides between steps, overlays in videos, multi-tenancy (the start and end cards are in, decision 63; overlays are in for screenshots only, decision 74, with fixed colours and placement and no styling options). No hooks "for later" beyond what ARCHITECTURE §15 already names.
 - No second TTS engine (the `tts.Engine` seam is ready for one), browser, storage backend or output format. Only languages are open-ended (BR-002).
 - `Recorder`, `Shooter`, `Synthesizer`, `Assembler`, `Cards` and `Files` (in `app/renderer`), `Store` (in `app/jobs`) and `Page`/`Session` (in `domain/executor`/`domain/recorder`/`domain/shooter`) exist as test seams, not for swapping Chromium, ffmpeg, SQLite or the disk. No interface without a test seam. **Deviation:** `tts.Engine` is also a deliberate swap seam for the TTS engine (Decision 65, user choice); it is two methods, with a static switch to pick the adapter.
-- No retries, backoff or configurable timeouts. BR-004: one 30 s timeout, then abort.
+- `setup` supports linux amd64 only and edits no shell profile or config file; no arm64 Piper, macOS, Windows or package-manager packaging (decision 77).
+- No retries, backoff or configurable timeouts. BR-004: one 30 s timeout, then abort. (`setup` has one fixed download timeout and no retry either: a failed piece is fixed by rerunning.)
 - No scale design. One worker, one SQLite file, one render at a time (BR-008).
 
 ## DRY
@@ -48,7 +49,9 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 | Language selection, override > script > `["en"]` (BR-002) | one function, called by CLI, MCP validation and worker |
 | Voice resolution rules (BR-011) | `domain/voices`, over a provider's `Catalog` |
 | Built-in voices per language and Piper naming (`.onnx`, language from the name) | `adapters/tts/piper` (`Defaults`) |
-| Which TTS provider runs, and its binary and voice paths | `wire.TTS` selects; the provider's `providers/<name>/Dockerfile` ENV lines hold the paths |
+| Which TTS provider runs, and its binary and voice paths | `wire.TTS` selects (unset means piper at the install dir); the provider's `providers/<name>/Dockerfile` ENV lines hold the image's paths |
+| Native install dir and its layout (`piper/`, `piper/voices/`, `playwright-driver/`, `ms-playwright/`, `setup.json`) | `wire.InstallDir` (the dir) and `app/setup` (`PiperBin`, `VoicesDir`, `DriverDir`, `BrowsersDir`); `setup` writes and render reads through the same functions |
+| Piper release and voice pins (version, revision, sha256) | `app/setup/pins.env` (embedded; no pin value is in Go). `LoadPins` layers `--pins-file` files and `SCREENCASTER_*` variables over it; `providers/piper/Dockerfile` ARGs repeat the file (known debt), `pins_test.go` keeps them equal |
 | Step semantics (FR-005) and URL resolution against `baseUrl` (BR-010) | `domain/executor` (one type switch), shared by render and `explore_page` |
 | Failure shape `{step, lang, action, target, message}` | `domain/failure` (no JSON tags), used by CLI output and MCP tool errors; its stored JSON is a record in `adapters/sqlite`, its tool JSON an output type in `adapters/mcpserver`, both pinned by golden tests |
 | Output filename and timestamp format (FR-010) | one function in `app/renderer` |
@@ -82,20 +85,22 @@ Layout: ARCHITECTURE §3.
 | `app/renderer` | orchestrate the pipeline (video and screenshots), publish outputs | contain tool flags or SQL, or import a tool package |
 | `app/explorer` | explore one page | enqueue, record video or take the render lock |
 | `app/jobs` | job shape, statuses, the single worker | open SQLite or import MCP SDK types |
+| `app/setup` | check and install the native tools through ports; the pins | import a tool package, or be called by `render` |
 | `app/wire` | composition root: pick the TTS provider, map ports onto adapters | contain rules or render logic |
 | `adapters/tts/piper`, `adapters/assembler`, `adapters/browser` | wrap one external tool each (`adapters/tts/wav` reads a clip's length) | know about jobs, language policy or the queue |
 | `adapters/sqlite` | the jobs table and its stored JSON | import MCP SDK types or decide job transitions |
 | `adapters/mcpserver` | MCP tools and prompt, map errors to tool errors | contain render logic or SQL |
+| `adapters/download`, `adapters/apt`, `adapters/host` | sha256-checked HTTP fetch and tar.gz extract; `apt-get install ffmpeg`; root, architecture and PATH lookups | know the pins, the install layout or what `setup` is for |
 | `adapters/lock`, `adapters/osfs` | flock wrapper; the real file system | know why they are used |
 | `cmd/screencaster` | parse args, print progress, map result to exit code | contain render logic or wire tools |
 | `cmd/screencaster-mcp` | open the store, start the worker and the server | contain render logic or wire tools |
 
 Hard rules (ARCHITECTURE §3, enforced by depguard):
 - `domain` imports nothing from `app`, `adapters` or `cmd`; `app` (except `app/wire`) imports no adapter.
-- Only `adapters/tts/piper`, `adapters/assembler` and `adapters/browser` call `os/exec`; only `adapters/browser` calls playwright-go; only `adapters/sqlite` opens SQLite; only `adapters/mcpserver` and `cmd/screencaster-mcp` use the MCP SDK.
+- Only `adapters/tts/piper`, `adapters/assembler`, `adapters/browser`, `adapters/apt` and `adapters/host` call `os/exec`; only `adapters/browser` calls playwright-go (launch and `Install`); only `adapters/download` makes HTTP calls, and only `setup` uses it; only `adapters/sqlite` opens SQLite; only `adapters/mcpserver` and `cmd/screencaster-mcp` use the MCP SDK.
 - `cmd/screencaster` imports neither the MCP server nor the job store.
 - Domain rules (validation, language and voice resolution) live in `domain`, never in `main` or a handler.
-- Paths (`outputDir`, card images) and `baseUrl` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself; `main` passes `os.Getenv` and the working directory to `wire.TTS`.
+- Paths (`outputDir`, card images) and `baseUrl` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself; `main` passes `os.Getenv` and the working directory to `wire.TTS` and `wire.InstallDir`. **Deviation:** `wire.launcher` reads `PLAYWRIGHT_DRIVER_PATH` and `PLAYWRIGHT_BROWSERS_PATH` and sets the latter, because the driver process reads it from this process's environment and both mains and the explorer launch browsers (decision 77).
 - `screencaster-mcp` never writes to stdout except protocol frames. Logs go to stderr (ARCHITECTURE §12).
 
 ## SOLID
@@ -142,7 +147,7 @@ Go has no inheritance. The rule is about not rebuilding it.
 - **Fail early.** Validate script, narration, voices and storageState before starting a browser or Piper (FR-002, BR-011).
 - **Cleanup.** Temp files go under `.screencaster/tmp/<runId>/` and are removed with `defer` on success and abort. Write to `outputDir` only in the final publish step. Never open an existing output for writing (BR-006).
 - **Subprocesses.** `exec.CommandContext`, stdout and stderr captured, never inherited. Keep the last lines of stderr for error messages.
-- **Determinism.** No LLM calls, no HTTP clients, nothing random in anything that affects output (BR-001, NFR-003).
+- **Determinism.** No LLM calls, nothing random in anything that affects output, no HTTP client on the render path (BR-001, NFR-003); the one HTTP client, in `adapters/download`, serves only `setup`.
 - **API surface.** Everything lives under `internal/`, so nothing is importable from outside the module. Inside it, keep exported names few and documented.
 - **Comments.** Explain why, not what. Non-obvious choices (t0 after the sync marker, forced 30 fps) get one comment pointing to the ARCHITECTURE section or decision number.
 - **Tests.** Table-driven, one behaviour per case, names state the rule (`TestLanguages_overrideBeatsScript`). Reference the BR/FR when a test enforces one.
@@ -175,6 +180,7 @@ Everything not in this table is a review point.
 
 ## Known debt
 
+- The default Piper pins (version, sha256, voices revision and four voice sha256 values) live in `app/setup/pins.env` and in the `ARG`s of `providers/piper/Dockerfile`. `pins_test.go` fails when they differ, so bump both together. (A native user can override every pin with `--pins-file` or the environment without a rebuild.) Fix: have the Dockerfile build stage read `pins.env` (its build context is only `providers/piper` today). Fix: have the Dockerfile fetch through the Go pins, or generate one from the other.
 - `PLAYWRIGHT_GO_VERSION` in the `dev-base` stage of the `Dockerfile` repeats the playwright-go version in the root `go.mod`. Bump both together (the runtime image reads it from `go.mod`).
 - The playwright-go module path is `github.com/mxschmitt/playwright-go`, the one its `go.mod` declares (Decision 66). Re-check on every bump that it has not moved to `playwright-community`.
 - golangci-lint is pinned to v2.12.0 (newest that builds on Go 1.25) in two places: `Dockerfile` and `.github/workflows/ci.yml`. Bump both together when the Go version moves to 1.26.

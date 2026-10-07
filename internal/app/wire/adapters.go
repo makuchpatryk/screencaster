@@ -100,5 +100,5 @@ func (cardsPort) Screenshot(ctx context.Context, shots []renderer.Shot) error {
 	for i, s := range shots {
 		bs[i] = browser.Shot{HTML: s.HTML, Out: s.Out}
 	}
-	return browser.Launcher{}.Screenshot(ctx, bs)
+	return launcher().Screenshot(ctx, bs)
 }

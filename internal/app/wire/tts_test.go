@@ -8,6 +8,7 @@ import (
 
 	"screencaster/internal/adapters/tts/piper"
 	"screencaster/internal/domain/card"
+	"screencaster/internal/domain/voices"
 )
 
 // env is a getenv over a map, so no test touches the process environment.
@@ -30,12 +31,14 @@ func TestTTS(t *testing.T) { // PRD NFR-003 offline: Piper is the only adapter
 		{"piper", map[string]string{
 			"SCREENCASTER_TTS": "piper", "SCREENCASTER_PIPER_BIN": bin, "SCREENCASTER_PIPER_VOICES": voicesDir,
 		}, ""},
-		{"unset", map[string]string{}, "no TTS provider: set SCREENCASTER_TTS (available: piper)"},
 		{"unknown", map[string]string{"SCREENCASTER_TTS": "foo"}, `unknown TTS provider "foo" (available: piper)`},
 		{"piper binary missing", map[string]string{
 			"SCREENCASTER_TTS": "piper", "SCREENCASTER_PIPER_BIN": "/nope/piper", "SCREENCASTER_PIPER_VOICES": voicesDir,
 		}, "piper binary not found: /nope/piper"},
-		{"piper settings unset", map[string]string{"SCREENCASTER_TTS": "piper"}, "SCREENCASTER_PIPER_BIN"},
+		{"piper binary missing in the install dir", map[string]string{"SCREENCASTER_HOME": "/nope"},
+			"piper binary not found: /nope/piper/piper (run: sudo screencaster setup)"},
+		{"piper named, nothing set, nothing installed", map[string]string{"SCREENCASTER_TTS": "piper", "SCREENCASTER_HOME": "/nope"},
+			"piper binary not found: /nope/piper/piper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,6 +56,67 @@ func TestTTS(t *testing.T) { // PRD NFR-003 offline: Piper is the only adapter
 				t.Errorf("TTS() engine = %v on error, want nil", eng)
 			}
 		})
+	}
+}
+
+// installDir fakes what `screencaster setup` leaves: the Piper binary and a
+// voice under <dir>/piper.
+func installDir(t *testing.T, voice string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin, voices := PiperPaths(dir)
+	if err := os.MkdirAll(voices, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(voices, voice+".onnx"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func voiceNames(t *testing.T, e interface {
+	Catalog() (voices.Catalog, error)
+}) []string {
+	t.Helper()
+	c, err := e.Catalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, v := range c.Voices {
+		names = append(names, v.Name)
+	}
+	return names
+}
+
+// An unset SCREENCASTER_TTS is piper in the install dir: a native user sets no
+// variable after `setup` (decision 77).
+func TestTTS_unsetDefaultsToPiperAtTheInstallDir(t *testing.T) {
+	dir := installDir(t, "en_US-ryan-high")
+	eng, err := TTS(env(map[string]string{"SCREENCASTER_HOME": dir}), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := voiceNames(t, eng); len(got) != 1 || got[0] != "en_US-ryan-high" {
+		t.Errorf("voices = %v, want the one under the install dir", got)
+	}
+}
+
+func TestTTS_envOverrideBeatsTheInstallDir(t *testing.T) {
+	home := installDir(t, "en_US-ryan-high")
+	other := installDir(t, "pl_PL-darkman-medium")
+	bin, voicesDir := PiperPaths(other)
+	eng, err := TTS(env(map[string]string{
+		"SCREENCASTER_HOME": home, "SCREENCASTER_PIPER_BIN": bin, "SCREENCASTER_PIPER_VOICES": voicesDir,
+	}), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := voiceNames(t, eng); len(got) != 1 || got[0] != "pl_PL-darkman-medium" {
+		t.Errorf("voices = %v, want the override's", got)
 	}
 }
 

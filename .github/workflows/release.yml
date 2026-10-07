@@ -44,19 +44,24 @@ jobs:
           go-version-file: go.mod
 
       # Static binaries (the root Dockerfile builds them the same way); the
-      # version reaches both mains through one -X flag. The playwright CLI comes
-      # from the go.mod version and ships too: the binaries cannot fetch their
-      # driver and Chromium without it, and a user without Go cannot build it.
+      # version reaches both mains through one -X flag. A native user runs
+      # `screencaster setup`, which fetches the driver, Chromium, Piper and the
+      # voices itself, so no playwright CLI ships (decision 77).
+      # screencaster-docker is the zero-install path: the same script goes in
+      # every tarball and is also a Release asset, since a Docker user needs
+      # nothing else.
       - name: Build the binaries
         run: |
           mkdir dist
+          sed "s/@VERSION@/$VERSION/" scripts/screencaster-docker.sh > dist/screencaster-docker
+          chmod +x dist/screencaster-docker
           for arch in amd64 arm64; do
             export GOOS=linux GOARCH=$arch CGO_ENABLED=0
             go build -trimpath -ldflags "-X main.version=$VERSION" -o "build/$arch/" ./cmd/...
-            go build -trimpath -o "build/$arch/" github.com/mxschmitt/playwright-go/cmd/playwright
-            tar -C "build/$arch" -czf "dist/screencaster_${VERSION}_linux_${arch}.tar.gz" screencaster screencaster-mcp playwright
+            cp dist/screencaster-docker "build/$arch/"
+            tar -C "build/$arch" -czf "dist/screencaster_${VERSION}_linux_${arch}.tar.gz" screencaster screencaster-mcp screencaster-docker
           done
-          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+          (cd dist && sha256sum -- *.tar.gz screencaster-docker > SHA256SUMS)
 
       - uses: docker/login-action@v3
         with:
@@ -82,5 +87,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v$VERSION" dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "v$VERSION" dist/*.tar.gz dist/screencaster-docker dist/SHA256SUMS \
             --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes

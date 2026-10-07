@@ -7,7 +7,6 @@ package wire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -29,21 +28,28 @@ const (
 	ffprobeBin = "ffprobe"
 )
 
-// TTS builds the provider named by SCREENCASTER_TTS. An unset or unknown name
-// is an error, so the entry points fail before any work. The adapter's own
-// settings come from its own variables, set by the image; no path lives in
-// code. workDir is the project folder whose voices/ extends the catalog.
+// TTS builds the provider named by SCREENCASTER_TTS; unset means piper, whose
+// binary and voices default to the install dir `screencaster setup` fills
+// (decision 77). An unknown name is an error, so the entry points fail before
+// any work. SCREENCASTER_PIPER_BIN and SCREENCASTER_PIPER_VOICES override the
+// defaults (the Docker images set them). workDir is the project folder whose
+// voices/ extends the catalog.
 func TTS(getenv func(string) string, workDir string) (tts.Engine, error) {
 	switch name := getenv("SCREENCASTER_TTS"); name {
-	case "piper":
-		p, err := piper.New(getenv("SCREENCASTER_PIPER_BIN"),
-			getenv("SCREENCASTER_PIPER_VOICES"), filepath.Join(workDir, "voices"))
+	case "", "piper":
+		bin, voices := PiperPaths(InstallDir(getenv))
+		hint := " (run: sudo screencaster setup)"
+		if v := getenv("SCREENCASTER_PIPER_BIN"); v != "" {
+			bin, hint = v, ""
+		}
+		if v := getenv("SCREENCASTER_PIPER_VOICES"); v != "" {
+			voices = v
+		}
+		p, err := piper.New(bin, voices, filepath.Join(workDir, "voices"))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w%s", err, hint)
 		}
 		return p, nil // not `return piper.New(...)`: a nil *Piper would be a non-nil Engine
-	case "":
-		return nil, errors.New("no TTS provider: set SCREENCASTER_TTS (available: piper)")
 	default:
 		return nil, fmt.Errorf("unknown TTS provider %q (available: piper)", name)
 	}
@@ -79,7 +85,7 @@ func Explorer() explorer.Explorer {
 // launchRecording opens a recorded session with the cursor overlay and the
 // sync marker (FR-004, FR-006, decision 69).
 func launchRecording(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
-	s, err := browser.Launcher{}.Launch(ctx, browser.Options{
+	s, err := launcher().Launch(ctx, browser.Options{
 		BaseURL:      o.BaseURL,
 		StorageState: o.StorageState,
 		VideoDir:     o.VideoDir,
@@ -96,7 +102,7 @@ func launchRecording(ctx context.Context, o recorder.LaunchOptions) (recorder.Se
 // launchShots opens an unrecorded session with no cursor overlay: a screenshots
 // run has no video to show one in (decision 75).
 func launchShots(ctx context.Context, o shooter.LaunchOptions) (shooter.Session, error) {
-	s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
+	s, err := launcher().Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +111,7 @@ func launchShots(ctx context.Context, o shooter.LaunchOptions) (shooter.Session,
 
 // launchExploration opens a plain, unrecorded session (FR-017).
 func launchExploration(ctx context.Context, o explorer.LaunchOptions) (explorer.Session, error) {
-	s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
+	s, err := launcher().Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
 	if err != nil {
 		return nil, err
 	}

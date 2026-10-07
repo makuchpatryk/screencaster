@@ -10,7 +10,13 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
 
 Pick a version on the [Releases](https://github.com/makuchpatryk/screencaster/releases) page; `screencaster --version` reports it (`dev` for a local build).
 
-**Docker (supported path).** The image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg:
+**Docker, nothing else to install.** The image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg. Each release has a `screencaster-docker` script that runs it for you, with the flags below and the project folder mounted at `/work`:
+
+```bash
+./screencaster-docker render demos/my-demo.yaml
+```
+
+Or run the image yourself:
 
 ```bash
 docker pull ghcr.io/makuchpatryk/screencaster:latest      # or :X.Y.Z
@@ -20,22 +26,22 @@ docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gatewa
 
 The image is linux/amd64 only (Piper is pinned to its x86_64 build), so arm64 hosts run it under emulation. `compose.yaml` and the MCP example below use the local name `screencaster`; after a pull, `docker tag ghcr.io/makuchpatryk/screencaster:latest screencaster` makes it so (compose wants `screencaster:piper`).
 
-**Native binaries (linux amd64 and arm64).** Each release has `screencaster_X.Y.Z_linux_<arch>.tar.gz` with `screencaster`, `screencaster-mcp` and `playwright`, plus `SHA256SUMS` (`sha256sum -c SHA256SUMS`). The binaries do not bring their tools. Checked from scratch on `debian:bookworm-slim` (amd64); arm64 is built but not tested. You need:
+**Native binaries, one command.** Each release has `screencaster_X.Y.Z_linux_<arch>.tar.gz` with `screencaster`, `screencaster-mcp` and `screencaster-docker`, plus `SHA256SUMS` (`sha256sum -c SHA256SUMS`). The binaries bring no tools; `setup` fetches them. It is the only command that uses the network; `render` stays offline.
 
-1. **Piper and voices.** Take the Piper release and the voice files from the `piper` stage of [`providers/piper/Dockerfile`](providers/piper/Dockerfile), which holds the versions and checksums. Put the voices (each an `.onnx` plus an `.onnx.json`, the names the Dockerfile downloads) in one folder. Both binaries refuse to run without these variables:
-   ```bash
-   export SCREENCASTER_TTS=piper
-   export SCREENCASTER_PIPER_BIN=/opt/piper/piper
-   export SCREENCASTER_PIPER_VOICES=/opt/piper/voices
-   ```
-2. **ffmpeg** (with `ffprobe`) on `PATH`.
-3. **Playwright driver and Chromium.** The binaries do not fetch them themselves; without them a render fails with `please install the driver ... first`. Run the bundled CLI once, as the user who will render; `--with-deps` installs Chromium's system libraries and needs root:
-   ```bash
-   ./playwright install --with-deps chromium
-   ```
-   It stores the driver in `~/.cache/ms-playwright-go` and Chromium in `~/.cache/ms-playwright`, where the binaries look by default. To use other folders, set `PLAYWRIGHT_DRIVER_PATH` and `PLAYWRIGHT_BROWSERS_PATH` for both the install and the render.
+```bash
+tar xzf screencaster_X.Y.Z_linux_amd64.tar.gz
+sudo ./screencaster setup            # downloads and installs everything, once
+./screencaster setup --check         # one line per piece; exit 0 only when all are ok; needs no root
+./screencaster render demos/my-demo.yaml
+```
 
-Then `./screencaster render demos/my-demo.yaml`, as in step 4 below. Docker needs none of this.
+- **What `setup` installs**, into `/opt/screencaster` (override with `SCREENCASTER_HOME`, for `setup` and for every later run): Piper and the two built-in voices (versions and sha256 pinned in the binary), the Playwright driver and Chromium, and ffmpeg with `ffprobe`. Afterwards any user can render, with no `SCREENCASTER_*` variable set.
+- **Download values live in a `.env`-style file, not in Go:** [`internal/app/setup/pins.env`](internal/app/setup/pins.env) (Piper version, sha256 and URL base; voices revision, URL base and the voice files with their sha256). It is embedded in the binary, so a bare `setup` needs no config. To update without rebuilding, copy the keys you want to change into your own file and run `sudo ./screencaster setup --pins-file my-pins.env` (repeatable, later files win), or set the same keys as environment variables (they win over files; `SCREENCASTER_VOICE_FILES` takes `name=path=sha256` entries joined by `;`). A new `SCREENCASTER_PIPER_VERSION` needs its `SCREENCASTER_PIPER_SHA256` in the same place. Every download is still sha256-checked; a bad value or unknown key fails before any work. `sudo` drops your environment by default: use `sudo env VAR=value ./screencaster setup` or `sudo -E`.
+- **Needs root** (`sudo`), because it writes `/opt/screencaster` and runs `apt-get`. `--check` needs no root.
+- **Rerunning is safe.** Each piece is verified and skipped when good, repaired when missing or bad; a failed run resumes at the piece that failed.
+- **Hosts it contacts:** `github.com` (Piper), `huggingface.co` (voices), `nodejs.org` and `registry.npmjs.org` (the driver) and the Playwright CDN (Chromium). Behind a proxy or mirror, the error names the piece and the URL; the `PLAYWRIGHT_NODEJS_PATH`, `NODE_MIRROR` and `PLAYWRIGHT_GO_NPM_REGISTRY` variables of playwright-go apply.
+- **Debian and Ubuntu (apt) only for the automatic parts:** ffmpeg and Chromium's system libraries come from `apt-get`. On another distro `setup` still downloads the rest, then names what is left (`ffmpeg` and `ffprobe` on `PATH`; Chromium's libraries are not checked, install what Chromium needs for your distro). Not verified on other distros.
+- **linux amd64 only:** `setup` refuses other architectures before doing anything (Piper is pinned to x86_64). The arm64 tarball is built but its binaries cannot run `setup`; use Docker there.
 
 ## Quick start
 
@@ -53,7 +59,7 @@ Then `./screencaster render demos/my-demo.yaml`, as in step 4 below. Docker need
    - The host mapping lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
    - Plain Docker works too: `docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml`.
    - The container runs as root: the rendered files belong to root.
-   - The TTS provider comes from the image's environment: the Piper image sets `SCREENCASTER_TTS=piper` plus `SCREENCASTER_PIPER_BIN` and `SCREENCASTER_PIPER_VOICES`. Both binaries exit at startup when `SCREENCASTER_TTS` is unset or unknown, so a hand-built image must set it. `make image-base` builds the same image without any provider; each provider is a folder `providers/<name>/` with its own `Dockerfile`, built on it by `make image PROVIDER=<name>` (default `piper`).
+   - The TTS provider comes from the image's environment: the Piper image sets `SCREENCASTER_TTS=piper` plus `SCREENCASTER_PIPER_BIN` and `SCREENCASTER_PIPER_VOICES`. An unset `SCREENCASTER_TTS` means `piper` at the `setup` install dir (`/opt/screencaster/piper`); both binaries exit at startup when the name is unknown or the Piper binary is not there, so a hand-built image must set the three variables. `make image-base` builds the same image without any provider; each provider is a folder `providers/<name>/` with its own `Dockerfile`, built on it by `make image PROVIDER=<name>` (default `piper`).
    - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
 
 3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. Every path in a demo (`outputDir`, an intro or outro `image`) is relative to the demo file's folder and must stay inside the working directory (`/work` in Docker):

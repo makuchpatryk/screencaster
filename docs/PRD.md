@@ -493,7 +493,7 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 
 ### NFR-003: Offline TTS
 - **Requirement:** Rendering must make no network requests other than to the target app.
-- **Verification:** Code review; no HTTP clients besides Chromium.
+- **Verification:** Code review; no HTTP clients besides Chromium, except `adapters/download`, which only `screencaster setup` (the explicit install command) reaches.
 
 ### NFR-004: Compliance / availability
 - N/A — confirmed by user.

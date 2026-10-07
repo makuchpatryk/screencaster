@@ -32,7 +32,7 @@ func TestRun_langFlagOverridesScript(t *testing.T) { // FR-011, BR-002
 				got = req
 				return nil, nil
 			}
-			if code := run(context.Background(), tt.args, "/work", fake, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+			if code := run(context.Background(), tt.args, "/work", fake, setupConfig{}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
 				t.Fatalf("exit %d", code)
 			}
 			if !reflect.DeepEqual(got.LangOverride, tt.want) {
@@ -59,7 +59,7 @@ func TestRun_versionFlagPrintsBuildVersion(t *testing.T) { // release distributi
 	// renderWith(noEnv) has no provider: --version must not need one.
 	for name, render := range map[string]renderFunc{"fake": fake, "no provider": renderWith(noEnv)} {
 		stderr.Reset()
-		if code := run(context.Background(), []string{"--version"}, t.TempDir(), render, &stdout, &stderr); code != 0 {
+		if code := run(context.Background(), []string{"--version"}, t.TempDir(), render, setupConfig{}, &stdout, &stderr); code != 0 {
 			t.Fatalf("%s: exit %d, stderr %q", name, code, stderr.String())
 		}
 		if !strings.Contains(stderr.String(), "9.9.9") { // cobra prints to SetOut(stderr)
@@ -120,7 +120,7 @@ func TestRun_exitCodeAndOutput(t *testing.T) { // FR-011
 			fake := func(context.Context, renderer.Request) ([]renderer.Output, error) { return tt.outs, tt.err }
 			var stdout, stderr bytes.Buffer
 
-			code := run(context.Background(), tt.args, "/work", fake, &stdout, &stderr)
+			code := run(context.Background(), tt.args, "/work", fake, setupConfig{}, &stdout, &stderr)
 			if code != tt.wantCode {
 				t.Errorf("exit = %d, want %d", code, tt.wantCode)
 			}
@@ -159,7 +159,7 @@ func TestRun_warnsAboutScreencasterYAML(t *testing.T) { // decision 58
 			}
 			var stderr bytes.Buffer
 
-			code := run(context.Background(), []string{"render", "demos/a.yaml"}, dir, fake, &bytes.Buffer{}, &stderr)
+			code := run(context.Background(), []string{"render", "demos/a.yaml"}, dir, fake, setupConfig{}, &bytes.Buffer{}, &stderr)
 			if code != 0 || !called {
 				t.Errorf("exit = %d, rendered = %v; the warning must not stop the render", code, called)
 			}
@@ -178,7 +178,7 @@ func TestRun_progressGoesToStderr(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 
-	run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, &stdout, &stderr)
+	run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, setupConfig{}, &stdout, &stderr)
 	want := "[en] step 3/12 click role=button[name=\"New project\"]\n[en] step 4/12 wait\n"
 	if stderr.String() != want {
 		t.Errorf("stderr = %q, want %q", stderr.String(), want)
@@ -199,7 +199,7 @@ func TestRun_screenshotsProgressHasNoLanguageAndPathsListEveryPNG(t *testing.T) 
 	}
 	var stdout, stderr bytes.Buffer
 
-	if code := run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, &stdout, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, setupConfig{}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if want := "step 1/3 goto /\nstep 2/3 screenshot\nstep 3/3 screenshot #form\n"; stderr.String() != want {
@@ -219,7 +219,7 @@ func TestRun_logLinesGoToStderrAndPathsToStdout(t *testing.T) { // decision 64
 	}
 	var stdout, stderr bytes.Buffer
 
-	run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, &stdout, &stderr)
+	run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, setupConfig{}, &stdout, &stderr)
 	wantErr := "render start: demos/a.yaml name=a\n[en] step 1/1 goto /\nrender done in 3s\n"
 	if stderr.String() != wantErr {
 		t.Errorf("stderr = %q, want %q", stderr.String(), wantErr)
@@ -236,7 +236,7 @@ func TestRun_failedRenderPrintsItsEndLineThenTheErrorOnce(t *testing.T) { // dec
 	}
 	var stdout, stderr bytes.Buffer
 
-	if code := run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, &stdout, &stderr); code != 1 {
+	if code := run(context.Background(), []string{"render", "demos/a.yaml"}, "/work", fake, setupConfig{}, &stdout, &stderr); code != 1 {
 		t.Errorf("exit = %d, want 1", code)
 	}
 	if want := "render failed after 4s\nboom\n"; stderr.String() != want {

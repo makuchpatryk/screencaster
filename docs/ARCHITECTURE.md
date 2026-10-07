@@ -11,7 +11,7 @@ This document holds the structural rules: how the code is divided, what may depe
 | Re-render is deterministic, no LLM at render time | BR-001 | The render engine is a pure function of (script, voices, target app). Claude Code only authors YAML. |
 | Narration and action start together; the next step waits for both | BR-003, FR-007 | Audio is never played live. Clips are placed on a timeline by recorded offsets and mixed offline. |
 | Any step failure aborts everything, no partial output | BR-004, FR-008, FR-010 | Work in a temp dir, publish only after every language succeeded. |
-| Offline, $0 | NFR-003 | No HTTP clients in code. Chromium is the only network user. |
+| Offline, $0 | NFR-003 | Render has no network calls other than Chromium's. The one HTTP client (`adapters/download`) is reachable only from `setup`, the explicit install command (Decision 77). |
 | One developer, few videos | PRD §9 | Few moving parts: one process, one worker, one SQLite file. No scale design. |
 | Same selectors in explore and render | Decision 23 | One step executor serves both. |
 
@@ -67,18 +67,23 @@ internal/
     renderer/              Prepare (plan.go), Render (render.go), publish (publish.go)  FR-008, FR-010, FR-020
     explorer/              explore_page logic                                 FR-017
     jobs/                  Job, statuses, the single worker, Store port       FR-014, FR-015
-    wire/                  composition root: TTS factory, NewDeps, port -> adapter mapping
+    setup/                 `screencaster setup`: check and install the native tools (pins.go, setup.go)  Decision 77
+    wire/                  composition root: TTS factory, NewDeps, Setup, port -> adapter mapping
   adapters/                one external tool or protocol each
-    browser/               playwright-go: launch, context, screenshots, overlay.js  FR-004, FR-020
+    browser/               playwright-go: launch, context, screenshots, overlay.js, install (install.go)  FR-004, FR-020
     assembler/             ffmpeg: mix, cards, transcode, mux, tags           FR-009
     tts/                   Engine contract; piper/ (the only Piper code), wav/ (clip length)  FR-003
     sqlite/                jobs table, stored JSON, startup clean-up          FR-014, FR-015
     mcpserver/             MCP tools and prompt                               FR-012, 013, 017, 018, 019, 020
     lock/                  flock-based render lock                            §6.3
-    osfs/                  the real file system behind renderer.Files
+    osfs/                  the real file system behind renderer.Files and setup.Files
+    download/              HTTP fetch with sha256 check, tar.gz extract (setup only)  Decision 77
+    apt/                   apt-get install of ffmpeg (setup only)
+    host/                  root, architecture and PATH lookups (setup only)
 tests/e2e/                 same module, //go:build e2e
 testdata/                  fixture app and sample scripts
 providers/<name>/          one TTS provider's image layer: Dockerfile (dev + runtime stages), image-check.sh
+scripts/                   screencaster-docker.sh: the template of the Docker wrapper shipped in the release
 ```
 
 The JSON Schema sits next to the code that embeds it (`internal/domain/script`), because `go:embed` cannot reach a parent directory (Decision 55).
@@ -86,9 +91,9 @@ The JSON Schema sits next to the code that embeds it (`internal/domain/script`),
 **Dependency rules**
 
 - `domain` imports nothing from `app`, `adapters` or `cmd`, and no tool library (`os/exec`, playwright-go, SQLite, MCP SDK).
-- `app` reaches tools only through ports it declares (`Synthesizer`, `Recorder`, `Shooter`, `Assembler`, `Cards`, `Files` in `renderer`; `Store` in `jobs`). `app/wire` is the one exception: the composition root that maps the ports onto the adapters.
-- Only `adapters/tts/piper`, `adapters/assembler` and `adapters/browser` start subprocesses; only `adapters/browser` calls playwright-go; only `adapters/sqlite` opens SQLite; only `adapters/mcpserver` and `cmd/screencaster-mcp` use the MCP SDK. `cmd/screencaster` imports neither the MCP server nor the job store.
-- Both mains get the pipeline from `wire.TTS` and `wire.NewDeps`; neither builds a tool itself.
+- `app` reaches tools only through ports it declares (`Synthesizer`, `Recorder`, `Shooter`, `Assembler`, `Cards`, `Files` in `renderer`; `Store` in `jobs`; `Fetcher`, `Browser`, `Packages`, `Files`, `Host` in `setup`). `app/wire` is the one exception: the composition root that maps the ports onto the adapters.
+- Only `adapters/tts/piper`, `adapters/assembler`, `adapters/browser` and `adapters/apt` start subprocesses (`adapters/host` imports `os/exec` for `LookPath` only); only `adapters/browser` calls playwright-go, for launching and for `Install`; only `adapters/download` makes HTTP calls and only `setup` reaches it; only `adapters/sqlite` opens SQLite; only `adapters/mcpserver` and `cmd/screencaster-mcp` use the MCP SDK. `cmd/screencaster` imports neither the MCP server nor the job store.
+- Both mains get the pipeline from `wire.TTS` and `wire.NewDeps`; neither builds a tool itself. `cmd/screencaster` gets the `setup` ports from `wire.Setup`.
 - The renderer's port types (`RecordRequest`, `ShootRequest`, `AssembleRequest`, ...) repeat the wrappers' input shapes on purpose, and `wire` maps them field by field. That is duplication in letter, accepted so `renderer` names no tool package. Unit tests use fakes; only e2e uses the real tools.
 - Enforced by `depguard` in `.golangci.yml` (file globs over these paths, test files included).
 
@@ -290,20 +295,23 @@ stateDiagram-v2
 
 - **Base plus provider layer (Decision 65).** The root `Dockerfile` names no provider: `dev-base` (toolchain for `make`), `build` (static binaries, `go build ./cmd/...` from the root module) and `runtime-base` (both binaries, Chromium, ffmpeg, no TTS). Each provider is a folder `providers/<name>/` with its own `Dockerfile` whose `dev` and `runtime` stages build `FROM` those bases (`DEV_BASE`, `RUNTIME_BASE` build args) and set the provider ENV, plus an `image-check.sh`. `providers/piper` also holds the `piper` fetch stage (Piper + voices, checksum-pinned), shared by its `dev` and `runtime`.
 - **Build order.** `make dev-image` builds `screencaster-dev-base`, then `screencaster-dev` (tags `:<provider>` and latest). `make image` builds `screencaster-base`, then `screencaster:<provider>` and `screencaster` (latest). `PROVIDER` defaults to `piper`. `compose.yaml` only runs the built image, since compose cannot chain the two builds.
-- **Provider selection.** The image sets `SCREENCASTER_TTS` (and the provider's own variables: `SCREENCASTER_PIPER_BIN`, `SCREENCASTER_PIPER_VOICES`). `screencaster-mcp` calls `wire.TTS` at startup; the CLI calls it when a render starts, so `--help` and `--version` work without a provider. Either way it fails with a clear message, before any render work, when the name is unset or unknown or the Piper binary is missing. No image path lives in Go code.
+- **Provider selection.** The image sets `SCREENCASTER_TTS` (and the provider's own variables: `SCREENCASTER_PIPER_BIN`, `SCREENCASTER_PIPER_VOICES`). `screencaster-mcp` calls `wire.TTS` at startup; the CLI calls it when a render starts, so `--help` and `--version` work without a provider. Either way it fails with a clear message, before any render work, when the name is unknown or the Piper binary is missing. An unset name means `piper`, whose binary and voices default to the install dir `screencaster setup` fills (`<dir>/piper`, `<dir>/piper/voices`); the two Piper variables override. The image sets all three, so no image path lives in Go code and a native user sets none.
 - Voice discovery belongs to the provider. The Piper adapter scans the image's voice folder and `/work/voices` on every call; the language is the voice name up to the first `_` (FR-018).
 - `--add-host=host.docker.internal:host-gateway` lets a `baseUrl` reach the host app on Linux (Decision 27). The container runs as root, so output files are root-owned.
 - **Stdio hygiene.** MCP uses stdout for protocol frames, so all logging goes to stderr and subprocess output (Piper, ffmpeg, the Playwright driver) is captured, never inherited. A stray byte on stdout corrupts the session.
-- **Release (Decision 76).** The `release` workflow is started by hand with a version `X.Y.Z`. It cross-compiles `screencaster`, `screencaster-mcp` and the `playwright` CLI for linux amd64 and arm64 into two tarballs plus `SHA256SUMS`, runs `make image VERSION=X.Y.Z` and `make image-check`, pushes `ghcr.io/makuchpatryk/screencaster:X.Y.Z` and `:latest`, and creates the GitHub Release last, so a failed build leaves no half-published release. The version reaches both mains through one `-X main.version` flag (`var version = "dev"` in each); the `VERSION` build arg and `make` variable carry it into the `build` stage. The image is amd64 only (Piper is pinned to `piper_linux_x86_64` in `providers/piper/Dockerfile`); the native binaries need the provider variables, ffmpeg and Chromium installed by the user (README, Install).
+- **Native install (Decision 77).** `sudo ./screencaster setup` (use case `app/setup`) checks and installs five pieces under the install dir, `/opt/screencaster` or `SCREENCASTER_HOME`: Piper (`piper/`), the two built-in voices (`piper/voices/`), the Playwright driver (`playwright-driver/`), Chromium (`ms-playwright/`) and ffmpeg (system, apt). Piper and the voices are sha256-pinned: the values are not in Go but in `app/setup/pins.env` (embedded), which repeats the ARGs of `providers/piper/Dockerfile`; `pins_test.go` fails when the two differ. `LoadPins` merges three layers, each winning over the one before: the embedded `pins.env`, any `setup --pins-file` (same format, repeatable), and the environment (`SCREENCASTER_PIPER_VERSION`, `_PIPER_SHA256`, `_PIPER_URL_BASE`, `_VOICES_REV`, `_VOICES_URL_BASE`, and `SCREENCASTER_VOICE_FILES` with `name=path=sha256;...`). A layer that sets a Piper version must set its sha256; an unknown key is an error. An update needs no rebuild. The driver and Chromium come from one `playwright.Install` call (`adapters/browser`); ffmpeg from `apt-get` when apt exists, else an error naming the command. `setup.json` in the install dir records what was installed (Piper's pin; the release version for the driver and Chromium), so a rerun verifies each piece, skips the good ones and repairs the rest; a new release reinstalls the driver and Chromium. `setup --check` changes nothing and needs no root. `wire` points the render at the same dir: `wire.TTS` defaults to Piper there, and `wire.launcher` sets the driver dir and `PLAYWRIGHT_BROWSERS_PATH` unless `PLAYWRIGHT_DRIVER_PATH` / `PLAYWRIGHT_BROWSERS_PATH` are set (the images set them). `setup` refuses non-amd64 and, unless `--check`, non-root before any work. System libraries for Chromium come from `--with-deps` on apt systems only.
+- **Release (Decision 76, amended by 77).** The `release` workflow is started by hand with a version `X.Y.Z`. It cross-compiles `screencaster` and `screencaster-mcp` for linux amd64 and arm64, adds `screencaster-docker` (the template `scripts/screencaster-docker.sh` with the version filled in: `docker run` of `ghcr.io/makuchpatryk/screencaster:X.Y.Z` with `--init`, `--shm-size=1g`, the host mapping and `$PWD` mounted at `/work`) to each of the two tarballs and as a Release asset, plus `SHA256SUMS`, runs `make image VERSION=X.Y.Z` and `make image-check`, pushes `ghcr.io/makuchpatryk/screencaster:X.Y.Z` and `:latest`, and creates the GitHub Release last, so a failed build leaves no half-published release. The version reaches both mains through one `-X main.version` flag (`var version = "dev"` in each); the `VERSION` build arg and `make` variable carry it into the `build` stage. The image is amd64 only (Piper is pinned to `piper_linux_x86_64` in `providers/piper/Dockerfile`); the native binaries run `screencaster setup` once (above) and need network, and Debian/Ubuntu for the automatic ffmpeg and Chromium libraries (README, Install).
 - Go tooling runs in the dev image (Decision 52); `make image-check` runs the provider's own `image-check.sh` (for Piper: the built-in voices are in the image).
 
 ## 13. Testing strategy
 
 | Level | Scope | Tools |
 |-------|-------|-------|
-| Unit | schema and cross-field rules, voice resolution, offset math, the wait rule, error formatting, queue ordering, recovery | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler`, `Cards` |
+| Unit | schema and cross-field rules, voice resolution, offset math, the wait rule, error formatting, queue ordering, recovery; `setup`: every check and install branch, root and architecture refusal, resume after a failure, the pins equal the Dockerfile ARGs; download (httptest, checksum, tar traversal), apt argument list, the Docker script template | `go test`, fakes for `Recorder`, `Session`, `Synthesizer`, `Assembler`, `Cards`, and for the `setup` ports; no network |
 | Integration | SQLite store, lock semantics, MCP wiring over an in-memory transport | `go test` |
 | E2E | fixture app → real render (EN, EN+PL), output format, drift, duration ratio (NFR-001), an `explore_page` selector used in a render; a screenshots run (sizes per capture area, annotation pixels, no overlay leak, overwrite and stale removal) | `make e2e` in the dev image; `make e2e-runtime` runs the CLI tests against the runtime image (Decisions 54, 56, 68) |
+
+`Installer.Install` (the Playwright download) is not unit-tested. It is checked by hand before a release: on a bare `debian:bookworm-slim` (amd64) with network, extract the tarball, `sudo ./screencaster setup`, `setup --check` all `ok`, a second `setup` that changes nothing, and a non-root render of a fixture demo with no `SCREENCASTER_*` variable.
 
 CI runs lint, vet and `go test -race` (one `check` job), an image build (`image`) and the e2e suite in the dev image (`e2e`, Decision 68). The e2e job has no Docker layer cache, so every run builds the images. The manual `release` workflow (§12) runs `make image-check` but not lint, tests or e2e: dispatch it from a green `main`.
 
@@ -312,7 +320,7 @@ CI runs lint, vet and `go test -race` (one `check` job), an image build (`image`
 Local single-user tool (PRD §14), so the model is minimal:
 
 - An inline `storageState` holds live session cookies: keep such a demo out of git.
-- No outbound network except Chromium to `baseUrl` and absolute `goto` URLs (NFR-003).
+- No outbound network from a render except Chromium to `baseUrl` and absolute `goto` URLs (NFR-003). `screencaster setup` is the one command that downloads, and only from pinned or fixed sources: `github.com` (Piper release, sha256-checked), `huggingface.co` (voices at a fixed revision, sha256-checked), `nodejs.org` and `registry.npmjs.org` (the Playwright driver, fetched by playwright-go) and the Playwright CDN (Chromium), plus the distro's apt mirrors for ffmpeg. It runs as root and writes the install dir and, through apt, the system.
 - Scripts are data. YAML parses into typed structs, the schema rejects unknown fields, and selectors go only to Playwright. Paths in scripts and tool input are not trusted: they are checked against the working directory (Decision 58).
 
 ## 15. Extension points (post-MVP)
@@ -323,7 +331,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61, 65–71 and 76 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61, 65–71, 76 and 77 are only here.
 
 | # | Decision | Why |
 |---|----------|-----|
@@ -359,7 +367,8 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 
 | 73 | Screenshots publish to `<outputDir>/<name>/screenshots/NN.png`, overwritten on rerun; stale `NN.png` removed, other files kept. Exception to BR-006 and §4 rule 5 | Timestamped run folder | User choice. Stable paths for docs and READMEs that embed the images. |
 | 74 | Annotations (box, arrow, label, dim) are a DOM overlay in document coordinates, injected before the capture and removed after; opt-in per step | Go image post-processing | User choice. Chromium already renders the text and glyphs; no new dependency. |
 | 75 | `domain/shooter` runs a screenshots run and intercepts `screenshot` steps; the executor is unchanged; the renderer reaches it through a `Shooter` port wired in `app/wire`. `take_screenshots` reuses the queue, worker, lock and `get_render_status`; no job-kind column | `Page.Screenshot` plus an executor case; the capture loop in `adapters/browser`; a separate queue | The executor stays file-agnostic and its fakes untouched; step semantics stay in one place; the renderer branches on the script type, so the worker needs no change. |
-| 76 | Releases are cut by hand: the `release` workflow takes a version, builds linux amd64 and arm64 tarballs (`screencaster`, `screencaster-mcp`, `playwright`) with plain `go build`, pushes an amd64-only image to GHCR and creates the GitHub Release last. The version is injected once by `-ldflags -X main.version`; native binaries need Piper, ffmpeg and Chromium installed by the user | GoReleaser; tag-push or per-commit triggers; a multi-arch image; extracting binaries from the Docker `build` stage; a `version` subcommand | User choice for the manual trigger, the amd64 image, `--version` and the shipped `playwright` CLI. Two binaries and one OS do not need a release tool; Piper is pinned to x86_64, so an arm64 image would be untested by `make e2e-runtime`; the binaries cannot fetch their driver and Chromium, and a user without Go cannot build the CLI. |
+| 76 | Releases are cut by hand: the `release` workflow takes a version, builds linux amd64 and arm64 tarballs (`screencaster`, `screencaster-mcp`; amended by 77: no `playwright`, plus `screencaster-docker`) with plain `go build`, pushes an amd64-only image to GHCR and creates the GitHub Release last. The version is injected once by `-ldflags -X main.version`; native binaries install their tools with `setup` (77) | GoReleaser; tag-push or per-commit triggers; a multi-arch image; extracting binaries from the Docker `build` stage; a `version` subcommand | User choice for the manual trigger, the amd64 image, `--version` and the shipped `playwright` CLI. Two binaries and one OS do not need a release tool; Piper is pinned to x86_64, so an arm64 image would be untested by `make e2e-runtime`; the binaries cannot fetch their driver and Chromium, and a user without Go cannot build the CLI. |
+| 77 | One `screencaster setup` command (use case `app/setup`, ports for download, browser install, apt, files and host) installs Piper, the voices, the Playwright driver, Chromium and ffmpeg into a compiled-in install dir `/opt/screencaster` (`SCREENCASTER_HOME` overrides); `--check` reports without changing; pins live in an embedded `pins.env` (parity test with the Dockerfile ARGs), overridable by `--pins-file` files and `SCREENCASTER_*` variables so an update needs no rebuild; `SCREENCASTER_TTS` unset means piper at the install dir; Playwright is installed through playwright-go's `Install`, so no CLI ships; the Docker path is a separate script `screencaster-docker` in the tarball; the Dockerfiles keep their own install layers | A shell `install.sh` with a `pins.env`; one adapter package called from `cmd` without a use case; install into `~/.cache` with `SUDO_USER`; shipping the `playwright` CLI; a `docker-install` subcommand | The README's three manual steps were the main barrier to native use. A use case with ports tests every branch with fakes and keeps `wire` the one composition root; a fixed dir readable by all users means any user can render after one root run; the library already covers the CLI's options, so one binary less ships (cost: Node.js and npm downloads at setup); a separate script lets a Docker user take one file. Costs: pins in two places (guarded by `pins_test.go`), and `render` is still offline while one new command uses the network. |
 
 ## 17. Open items for spikes
 

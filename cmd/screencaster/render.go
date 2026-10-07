@@ -22,7 +22,7 @@ type renderFunc func(ctx context.Context, req renderer.Request) ([]renderer.Outp
 // run executes the command line args and returns the exit code: 0 on
 // success, 1 on any failure (FR-011). Progress and errors go to stderr, the
 // output paths to stdout.
-func run(ctx context.Context, args []string, workDir string, render renderFunc, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, workDir string, render renderFunc, setupCfg setupConfig, stdout, stderr io.Writer) int {
 	root := &cobra.Command{
 		Use:           "screencaster",
 		Short:         "Render demo scripts into narrated MP4 videos",
@@ -34,6 +34,7 @@ func run(ctx context.Context, args []string, workDir string, render renderFunc, 
 		_, _ = fmt.Fprintln(stderr, ignoredConfigFile+" is ignored; move its fields into the demo script")
 	}
 	root.AddCommand(renderCmd(workDir, render, stdout, stderr))
+	root.AddCommand(setupCmd(setupCfg, stdout, stderr))
 	root.SetArgs(args)
 	root.SetOut(stderr)
 	root.SetErr(stderr)

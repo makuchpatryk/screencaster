@@ -35,7 +35,8 @@ func main() {
 	// SIGINT/SIGTERM cancel the render, which closes the browser and removes
 	// the temp dir (ARCHITECTURE §6.4).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], wd, renderWith(os.Getenv), os.Stdout, os.Stderr)
+	cfg := setupConfig{Deps: wire.Setup(), Dir: wire.InstallDir(os.Getenv), Version: version, Getenv: os.Getenv}
+	code := run(ctx, os.Args[1:], wd, renderWith(os.Getenv), cfg, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }

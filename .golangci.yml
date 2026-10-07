@@ -50,9 +50,11 @@ linters:
             - "!**/internal/adapters/tts/piper/**"
             - "!**/internal/adapters/assembler/**"
             - "!**/internal/adapters/browser/**"
+            - "!**/internal/adapters/apt/**"
+            - "!**/internal/adapters/host/**"
           deny:
             - pkg: os/exec
-              desc: only adapters/tts/piper, adapters/assembler and adapters/browser spawn processes
+              desc: only adapters/tts/piper, adapters/assembler, adapters/browser, adapters/apt and adapters/host use os/exec
         playwright-only-in-browser:
           files: ["$all", "!**/internal/adapters/browser/**"]
           deny:
