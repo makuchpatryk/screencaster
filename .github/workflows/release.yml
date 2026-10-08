@@ -61,7 +61,6 @@ jobs:
             cp dist/screencaster-docker "build/$arch/"
             tar -C "build/$arch" -czf "dist/screencaster_${VERSION}_linux_${arch}.tar.gz" screencaster screencaster-mcp screencaster-docker
           done
-          (cd dist && sha256sum -- *.tar.gz screencaster-docker > SHA256SUMS)
 
       - uses: docker/login-action@v3
         with:
@@ -82,10 +81,15 @@ jobs:
             docker push "$IMAGE:$tag"
           done
 
-      # Last, so a failed build never leaves a half-published Release.
-      - name: Create the Release
+      # Last, so a failed build never leaves a half-published Release. A rerun
+      # for the same commit replaces the assets of the Release that exists.
+      - name: Create or update the Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v$VERSION" dist/*.tar.gz dist/screencaster-docker dist/SHA256SUMS \
-            --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" dist/*.tar.gz dist/screencaster-docker --clobber
+          else
+            gh release create "v$VERSION" dist/*.tar.gz dist/screencaster-docker \
+              --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
+          fi

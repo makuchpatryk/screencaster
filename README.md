@@ -26,7 +26,7 @@ docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gatewa
 
 The image is linux/amd64 only (Piper is pinned to its x86_64 build), so arm64 hosts run it under emulation. `compose.yaml` and the MCP example below use the local name `screencaster`; after a pull, `docker tag ghcr.io/makuchpatryk/screencaster:latest screencaster` makes it so (compose wants `screencaster:piper`).
 
-**Native binaries, one command.** Each release has `screencaster_X.Y.Z_linux_<arch>.tar.gz` with `screencaster`, `screencaster-mcp` and `screencaster-docker`, plus `SHA256SUMS` (`sha256sum -c SHA256SUMS`). The binaries bring no tools; `setup` fetches them. It is the only command that uses the network; `render` stays offline.
+**Native binaries, one command.** Each release has `screencaster_X.Y.Z_linux_<arch>.tar.gz` with `screencaster`, `screencaster-mcp` and `screencaster-docker`. The binaries bring no tools; `setup` fetches them. It is the only command that uses the network; `render` stays offline.
 
 ```bash
 tar xzf screencaster_X.Y.Z_linux_amd64.tar.gz
