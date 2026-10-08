@@ -29,18 +29,17 @@ const markerText = "Bang. This is the marker."
 // narrated marker step: press Enter on #marker flashes the viewport white.
 // press has no cursor glide, so the flash starts right at the step offset.
 const renderScript = `name: e2e-demo
-baseUrl: %s
-%s
+%[2]s
 meta:
   title: E2E demo
   description: Every action plus the drift marker.
 steps:
-  - goto: /index.html
+  - goto: %[1]s/index.html
     narration:
       en: Welcome to the fixture app.
       pl: Witaj w aplikacji testowej.
   - wait: "#logged-in"
-  - goto: /projects.html
+  - goto: %[1]s/projects.html
   - click: role=button[name="New project"]
     narration:
       en: Open the form.
@@ -53,7 +52,7 @@ steps:
   - wait: "#toast"
   - scroll: "#footer"
   - scroll: { y: 0 }
-  - goto: /marker.html
+  - goto: %[1]s/marker.html
   - wait: 1000
   - press: { key: Enter, selector: "#marker" }
     narration:
@@ -64,12 +63,11 @@ steps:
 
 // failingScript is a format template too, with the same two arguments.
 const failingScript = `name: e2e-fail
-baseUrl: %s
-%s
+%[2]s
 steps:
-  - goto: /index.html
+  - goto: %[1]s/index.html
   - wait: "#logged-in"
-  - goto: /projects.html
+  - goto: %[1]s/projects.html
   - click: "#does-not-exist"
 `
 
@@ -91,7 +89,7 @@ func cliBinary(t *testing.T) string {
 	return bin
 }
 
-// project builds a work dir like a user's repo: the scripts under demos/. Each script carries its own baseUrl (decision 58).
+// project builds a work dir like a user's repo: the scripts under demos/. Each script is self-contained: absolute gotos (decisions 58, 78).
 func project(t *testing.T, baseURL string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -259,12 +257,11 @@ func TestRender_cliFailureLeavesOutputUnchanged(t *testing.T) {
 // publicScript is a whole demo of a public site: no storageState, and nothing
 // else in the work dir (decision 58). It reuses assertVideo's tags.
 const publicScript = `name: e2e-demo
-baseUrl: %s
 meta:
   title: E2E demo
   description: Every action plus the drift marker.
 steps:
-  - goto: /marker.html
+  - goto: %[1]s/marker.html
   - wait: 500
 `
 

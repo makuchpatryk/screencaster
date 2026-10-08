@@ -1,10 +1,9 @@
 # An empty narration string keeps the step silent in that language, but still
 # counts as an entry for it (FR-002).
 name: silent-narration
-baseUrl: http://host.docker.internal:3000
 languages: [en, pl]
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
     narration:
       en: ""
       pl: ""

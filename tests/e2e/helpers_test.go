@@ -48,7 +48,6 @@ func newRecorder(t *testing.T, launched *time.Time) recorder.Recorder {
 	t.Helper()
 	launch := func(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
 		s, err := browser.Launcher{}.Launch(ctx, browser.Options{
-			BaseURL:      o.BaseURL,
 			StorageState: o.StorageState,
 			VideoDir:     o.VideoDir,
 			Marker:       true,

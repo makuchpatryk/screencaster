@@ -22,11 +22,10 @@ import (
 func TestRecordInput_everyFieldCrosses(t *testing.T) {
 	called := -1
 	r := renderer.RecordRequest{
-		Steps:        []script.Step{{Action: script.Goto{URL: "/"}}},
+		Steps:        []script.Step{{Action: script.Goto{URL: "http://app/"}}},
 		Clips:        map[int]time.Duration{0: time.Second},
 		Lang:         "pl",
 		Dir:          "/tmp/v",
-		BaseURL:      "http://app",
 		StorageState: &script.StorageState{Cookies: []script.Cookie{{Name: "s"}}},
 		StartImage:   "/tmp/intro.png",
 		OnStep:       func(i int) { called = i },
@@ -35,7 +34,7 @@ func TestRecordInput_everyFieldCrosses(t *testing.T) {
 	got.OnStep(3)
 	got.OnStep = nil
 	want := recorder.Input{
-		Steps: r.Steps, Clips: r.Clips, Lang: "pl", Dir: "/tmp/v", BaseURL: "http://app",
+		Steps: r.Steps, Clips: r.Clips, Lang: "pl", Dir: "/tmp/v",
 		StorageState: r.StorageState, StartImage: "/tmp/intro.png",
 	}
 	if !reflect.DeepEqual(got, want) || called != 3 {
@@ -49,7 +48,6 @@ func TestShootInput_everyFieldCrosses(t *testing.T) {
 	r := renderer.ShootRequest{
 		Steps:        []script.Step{{Action: script.Screenshot{}}},
 		Dir:          "/tmp/shots",
-		BaseURL:      "http://app",
 		StorageState: &script.StorageState{Cookies: []script.Cookie{{Name: "s"}}},
 		OnStep:       func(i int) { called = i },
 	}
@@ -57,7 +55,7 @@ func TestShootInput_everyFieldCrosses(t *testing.T) {
 	got.OnStep(2)
 	got.OnStep = nil
 	want := shooter.Input{
-		Steps: r.Steps, Dir: "/tmp/shots", BaseURL: "http://app", StorageState: r.StorageState,
+		Steps: r.Steps, Dir: "/tmp/shots", StorageState: r.StorageState,
 	}
 	if !reflect.DeepEqual(got, want) || called != 2 {
 		t.Errorf("shootInput() = %+v (OnStep called with %d), want %+v", got, called, want)

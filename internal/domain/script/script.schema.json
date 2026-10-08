@@ -3,7 +3,7 @@
   "title": "screencaster demo script",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "baseUrl", "steps"],
+  "required": ["name", "steps"],
   "properties": {
     "name": {
       "description": "Used in output filenames: <name>.<lang>.<timestamp>.mp4",
@@ -14,11 +14,6 @@
       "description": "video renders narrated MP4s; screenshots writes PNGs at each screenshot step to <outputDir>/<name>/screenshots/",
       "enum": ["video", "screenshots"],
       "default": "video"
-    },
-    "baseUrl": {
-      "description": "Absolute http(s) URL of the app. Relative goto URLs resolve against it.",
-      "type": "string",
-      "minLength": 1
     },
     "storageState": {
       "description": "Session the browser starts with, in the shape of Playwright's context.storageState(): cookies and localStorage. Omit for a fresh, logged-out session. It holds secrets: keep the script out of git.",
@@ -200,7 +195,7 @@
           "additionalProperties": { "type": "string", "maxLength": 1000 }
         },
         "goto": {
-          "description": "Path relative to baseUrl, or an absolute http(s) URL used as-is",
+          "description": "Absolute http(s) URL of the page to open, e.g. https://example.com/projects",
           "type": "string",
           "minLength": 1
         },

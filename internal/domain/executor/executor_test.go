@@ -43,7 +43,6 @@ func (f *fakePage) Fill(sel, v string, d time.Duration) error {
 }
 
 func TestRun_actions(t *testing.T) {
-	const base = "http://host.docker.internal:3000"
 	tests := []struct {
 		name string
 		step script.Step
@@ -51,12 +50,7 @@ func TestRun_actions(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "goto resolves a relative path against baseUrl (FR-005 AC)",
-			step: script.Step{Action: script.Goto{URL: "/projects"}},
-			want: []string{"Goto(http://host.docker.internal:3000/projects)"},
-		},
-		{
-			name: "goto keeps an absolute URL",
+			name: "goto passes the URL through unchanged (FR-005 AC)",
 			step: script.Step{Action: script.Goto{URL: "https://example.com/a?b=1"}},
 			want: []string{"Goto(https://example.com/a?b=1)"},
 		},
@@ -134,10 +128,7 @@ func TestRun_actions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &fakePage{}
-			e, err := New(p, base, tt.mode)
-			if err != nil {
-				t.Fatal(err)
-			}
+			e := New(p, tt.mode)
 			if err := e.Run(context.Background(), 1, tt.step); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -164,7 +155,7 @@ func TestRun_failureCarriesStepActionTarget(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &fakePage{failOn: tt.failOn, err: boom}
-			e, _ := New(p, "http://x", Mode{Visuals: true})
+			e := New(p, Mode{Visuals: true})
 			err := e.Run(context.Background(), 4, tt.step)
 
 			var f *failure.Failure
@@ -183,7 +174,7 @@ func TestRun_failureCarriesStepActionTarget(t *testing.T) {
 
 func TestRun_canceledContextStopsBeforeTouchingThePage(t *testing.T) {
 	p := &fakePage{}
-	e, _ := New(p, "http://x", Mode{})
+	e := New(p, Mode{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -197,7 +188,7 @@ func TestRun_canceledContextStopsBeforeTouchingThePage(t *testing.T) {
 }
 
 func TestRun_waitMsStopsOnCancel(t *testing.T) {
-	e, _ := New(&fakePage{}, "http://x", Mode{})
+	e := New(&fakePage{}, Mode{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 

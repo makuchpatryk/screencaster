@@ -40,7 +40,6 @@ const (
 type Script struct {
 	Name         string            `json:"name"`
 	Type         string            `json:"type"` // "" means video; see Kind
-	BaseURL      string            `json:"baseUrl"`
 	StorageState *StorageState     `json:"storageState"`
 	OutputDir    string            `json:"outputDir"`
 	Languages    []string          `json:"languages"`
@@ -158,7 +157,7 @@ var compiledSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
 })
 
 // AbsoluteHTTP reports whether raw is an absolute http or https URL with a
-// host. It is the one URL rule for baseUrl and explore_page's url (BR-010).
+// host. It is the one URL rule for goto and explore_page's url (BR-010).
 func AbsoluteHTTP(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
@@ -176,6 +175,9 @@ func Parse(data []byte) (Script, error) {
 	jsonData, err := yaml.YAMLToJSON(data)
 	if err != nil {
 		return Script{}, failure.ValidationErrors{{Message: "invalid YAML: " + err.Error()}}
+	}
+	if hint := baseURLRemoved(jsonData); hint != nil {
+		return Script{}, hint
 	}
 	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(jsonData))
 	if err != nil {
@@ -195,16 +197,24 @@ func Parse(data []byte) (Script, error) {
 		return Script{}, fmt.Errorf("decode script: %w", err)
 	}
 	// The schema only says "non-empty string"; the URL rule lives in Go.
-	if !AbsoluteHTTP(s.BaseURL) {
-		return Script{}, failure.ValidationErrors{{
-			Pointer: "/baseUrl",
-			Message: "baseUrl must be an absolute http or https URL: " + s.BaseURL,
-		}}
-	}
-	if errs := checkType(s); len(errs) > 0 {
+	if errs := append(gotoErrors(s), checkType(s)...); len(errs) > 0 {
 		return Script{}, errs
 	}
 	return s, nil
+}
+
+// gotoErrors reports every goto whose URL is not absolute http(s) (BR-010).
+func gotoErrors(s Script) failure.ValidationErrors {
+	var errs failure.ValidationErrors
+	for i, st := range s.Steps {
+		if g, ok := st.Action.(Goto); ok && !AbsoluteHTTP(g.URL) {
+			errs = append(errs, failure.ValidationError{
+				Pointer: fmt.Sprintf("/steps/%d/goto", i),
+				Message: "goto must be an absolute http or https URL: " + g.URL,
+			})
+		}
+	}
+	return errs
 }
 
 // checkType holds the rules that tie the script type to the fields and steps
@@ -260,13 +270,12 @@ func ParseSteps(raw []json.RawMessage) ([]Step, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	// Placeholder name and baseUrl satisfy the script's required fields; only
-	// the steps are being checked. JSON is YAML, so Parse reads it as is.
+	// A placeholder name satisfies the script's required fields; only the
+	// steps are being checked. JSON is YAML, so Parse reads it as is.
 	data, err := json.Marshal(struct {
-		Name    string            `json:"name"`
-		BaseURL string            `json:"baseUrl"`
-		Steps   []json.RawMessage `json:"steps"`
-	}{"explore", "http://explore.invalid", raw})
+		Name  string            `json:"name"`
+		Steps []json.RawMessage `json:"steps"`
+	}{"explore", raw})
 	if err != nil {
 		return nil, fmt.Errorf("encode steps: %w", err)
 	}
@@ -275,6 +284,24 @@ func ParseSteps(raw []json.RawMessage) ([]Step, error) {
 		return nil, err
 	}
 	return s.Steps, nil
+}
+
+// baseURLRemovedHint is the one message a script with a top-level baseUrl
+// gets, with no schema errors beside it (decision 78).
+const baseURLRemovedHint = "baseUrl was removed: put the app's address into each goto URL, e.g. goto: http://172.17.0.1:3000/projects"
+
+// baseURLRemoved returns the hint when the top-level object has a baseUrl key,
+// or nil. The schema rejects the key too (additionalProperties), but its error
+// would not say what to do.
+func baseURLRemoved(jsonData []byte) failure.ValidationErrors {
+	var doc map[string]json.RawMessage
+	if json.Unmarshal(jsonData, &doc) != nil {
+		return nil // not an object: the schema reports it
+	}
+	if _, ok := doc["baseUrl"]; ok {
+		return failure.ValidationErrors{{Pointer: "/baseUrl", Message: baseURLRemovedHint}}
+	}
+	return nil
 }
 
 // oldFormHint is the one message a script in the flat `action:` step form

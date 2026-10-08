@@ -1,5 +1,4 @@
 name: demo
-baseUrl: http://host.docker.internal:3000
 steps:
   - narration:
       en: A step needs an action.

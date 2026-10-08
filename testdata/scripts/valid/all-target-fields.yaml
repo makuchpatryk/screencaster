@@ -1,6 +1,5 @@
 # Every target field of the demo: where to go, who is logged in, where MP4s land.
 name: all-target-fields
-baseUrl: https://example.com/app
 storageState:
   cookies:
     - name: session
@@ -21,4 +20,4 @@ storageState:
           value: t0k3n
 outputDir: videos
 steps:
-  - goto: /projects
+  - goto: https://example.com/app/projects

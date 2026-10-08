@@ -1,6 +1,5 @@
 name: demo
-baseUrl: http://host.docker.internal:3000
 intro:
   durationMs: 100
 steps:
-  - goto: /
+  - goto: http://host.docker.internal:3000/

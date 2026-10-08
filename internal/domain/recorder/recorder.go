@@ -39,7 +39,6 @@ type Session interface {
 // (FR-004).
 type LaunchOptions struct {
 	VideoDir     string
-	BaseURL      string
 	StorageState *script.StorageState
 	StartImage   string // picture the page shows until the first goto paints; "": plain
 }
@@ -76,8 +75,7 @@ type Input struct {
 	Steps        []script.Step
 	Clips        map[int]time.Duration
 	Lang         string
-	Dir          string // video output directory
-	BaseURL      string
+	Dir          string               // video output directory
 	StorageState *script.StorageState // nil: logged-out session
 	StartImage   string               // the start card's picture, continued until the first page loads
 	OnStep       func(i int)
@@ -97,15 +95,11 @@ type Output struct {
 // ends, ctx.Err() is returned. Temp files live under in.Dir; the caller removes
 // them.
 func (r Recorder) Record(ctx context.Context, in Input) (Output, error) {
-	sess, err := r.Launch(ctx, LaunchOptions{VideoDir: in.Dir, BaseURL: in.BaseURL, StorageState: in.StorageState, StartImage: in.StartImage})
+	sess, err := r.Launch(ctx, LaunchOptions{VideoDir: in.Dir, StorageState: in.StorageState, StartImage: in.StartImage})
 	if err != nil {
 		return Output{}, fmt.Errorf("launch browser (%s): %w", in.Lang, err)
 	}
-	ex, err := executor.New(sess, in.BaseURL, executor.Mode{Visuals: true})
-	if err != nil {
-		sess.Abort()
-		return Output{}, err
-	}
+	ex := executor.New(sess, executor.Mode{Visuals: true})
 
 	if err := sess.Start(); err != nil {
 		sess.Abort()

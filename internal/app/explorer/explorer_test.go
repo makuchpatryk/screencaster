@@ -123,7 +123,7 @@ func explorerWith(f *fakeSession) Explorer {
 func TestExplore_runsGotoThenActionsWithoutVisuals(t *testing.T) {
 	f := &fakeSession{}
 	out, err := explorerWith(f).Explore(context.Background(), Input{
-		BaseURL: "http://app", URL: "/projects",
+		URL:     "http://app/projects",
 		Actions: []script.Step{{Action: script.Click{Selector: "#a"}}},
 	})
 	if err != nil {
@@ -143,7 +143,7 @@ func TestExplore_runsGotoThenActionsWithoutVisuals(t *testing.T) {
 func TestExplore_failedActionReturnsStepAndSnapshot(t *testing.T) {
 	f := &fakeSession{failOn: "click #missing"}
 	out, err := explorerWith(f).Explore(context.Background(), Input{
-		BaseURL: "http://app", URL: "/projects",
+		URL:     "http://app/projects",
 		Actions: []script.Step{{Action: script.Hover{Selector: "#a"}}, {Action: script.Click{Selector: "#missing"}}},
 	})
 	var fail *failure.Failure
@@ -157,7 +157,7 @@ func TestExplore_failedActionReturnsStepAndSnapshot(t *testing.T) {
 
 func TestExplore_launchFailure(t *testing.T) {
 	e := Explorer{Launch: func(context.Context, LaunchOptions) (Session, error) { return nil, errors.New("no chromium") }}
-	if _, err := e.Explore(context.Background(), Input{BaseURL: "http://app", URL: "/"}); err == nil {
+	if _, err := e.Explore(context.Background(), Input{URL: "http://app/"}); err == nil {
 		t.Fatal("want error")
 	}
 }

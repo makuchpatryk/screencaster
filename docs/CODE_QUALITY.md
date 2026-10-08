@@ -52,7 +52,8 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 | Which TTS provider runs, and its binary and voice paths | `wire.TTS` selects (unset means piper at the install dir); the provider's `providers/<name>/Dockerfile` ENV lines hold the image's paths |
 | Native install dir and its layout (`piper/`, `piper/voices/`, `playwright-driver/`, `ms-playwright/`, `setup.json`) | `wire.InstallDir` (the dir) and `app/setup` (`PiperBin`, `VoicesDir`, `DriverDir`, `BrowsersDir`); `setup` writes and render reads through the same functions |
 | Piper release and voice pins (version, revision, sha256) | `app/setup/pins.env` (embedded; no pin value is in Go). `LoadPins` layers `--pins-file` files and `SCREENCASTER_*` variables over it; `providers/piper/Dockerfile` ARGs repeat the file (known debt), `pins_test.go` keeps them equal |
-| Step semantics (FR-005) and URL resolution against `baseUrl` (BR-010) | `domain/executor` (one type switch), shared by render and `explore_page` |
+| Step semantics (FR-005) | `domain/executor` (one type switch), shared by render and `explore_page`; a `goto` URL goes through unchanged |
+| The URL rule: `goto` and explore's `url` are absolute http(s) (BR-010) | `script.AbsoluteHTTP`, used by `Parse` and the `explore_page` handler |
 | Failure shape `{step, lang, action, target, message}` | `domain/failure` (no JSON tags), used by CLI output and MCP tool errors; its stored JSON is a record in `adapters/sqlite`, its tool JSON an output type in `adapters/mcpserver`, both pinned by golden tests |
 | Output filename and timestamp format (FR-010) | one function in `app/renderer` |
 | PNG names (`NN.png`, width by shot count) | `shooter.ShotName`; `renderer.shotFile` only recognizes them to remove stale ones |
@@ -100,7 +101,7 @@ Hard rules (ARCHITECTURE §3, enforced by depguard):
 - Only `adapters/tts/piper`, `adapters/assembler`, `adapters/browser`, `adapters/apt` and `adapters/host` call `os/exec`; only `adapters/browser` calls playwright-go (launch and `Install`); only `adapters/download` makes HTTP calls, and only `setup` uses it; only `adapters/sqlite` opens SQLite; only `adapters/mcpserver` and `cmd/screencaster-mcp` use the MCP SDK.
 - `cmd/screencaster` imports neither the MCP server nor the job store.
 - Domain rules (validation, language and voice resolution) live in `domain`, never in `main` or a handler.
-- Paths (`outputDir`, card images) and `baseUrl` come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself; `main` passes `os.Getenv` and the working directory to `wire.TTS` and `wire.InstallDir`. **Deviation:** `wire.launcher` reads `PLAYWRIGHT_DRIVER_PATH` and `PLAYWRIGHT_BROWSERS_PATH` and sets the latter, because the driver process reads it from this process's environment and both mains and the explorer launch browsers (decision 77).
+- Paths (`outputDir`, card images) come from the demo script via `renderer.Plan` (the `explore_page` handler gets them from its input) and are passed down. No package reads env vars or the working directory itself; `main` passes `os.Getenv` and the working directory to `wire.TTS` and `wire.InstallDir`. **Deviation:** `wire.launcher` reads `PLAYWRIGHT_DRIVER_PATH` and `PLAYWRIGHT_BROWSERS_PATH` and sets the latter, because the driver process reads it from this process's environment and both mains and the explorer launch browsers (decision 77).
 - `screencaster-mcp` never writes to stdout except protocol frames. Logs go to stderr (ARCHITECTURE §12).
 
 ## SOLID

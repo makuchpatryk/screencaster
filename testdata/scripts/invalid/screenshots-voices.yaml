@@ -1,6 +1,5 @@
 name: demo
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 voices: { en: en_US-lessac-medium }
 steps:
   - screenshot: true

@@ -1,9 +1,8 @@
 name: shots-annotate
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 outputDir: docs
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
   - screenshot:
       annotate: { selector: "#create", box: true }
   - screenshot:

@@ -69,8 +69,8 @@ func New(d Deps, version string) *mcp.Server {
 		InputSchema: exploreSchema,
 		Description: "Open a page of the app in a fresh browser and return its accessibility tree. " +
 			"Every interactive line ends with `-> <selector>`, a selector that is unique on the page and works unchanged in a script step. " +
-			"`url` must be absolute: pass the demo's baseUrl joined with the path, and its storageState if the app needs a login. " +
-			"`actions` (script steps without narration) are replayed first to reach a deeper page state; a relative goto there resolves against `url`. Every call starts from scratch. " +
+			"`url` must be an absolute http(s) URL, and pass its storageState if the app needs a login. " +
+			"`actions` (script steps without narration) are replayed first to reach a deeper page state; a goto there must be absolute too. Every call starts from scratch. " +
 			"A failing action returns an error naming the step plus the snapshot at that point.",
 	}, h.explorePage)
 	mcp.AddTool(s, &mcp.Tool{
@@ -96,7 +96,7 @@ func renderDescription() string {
 		"The script is validated now; on success the job is queued and its id and queue position are returned. " +
 		"Poll `get_render_status` with the id.\n\n" +
 		"Rules:\n" +
-		"- URLs are paths relative to the script's `baseUrl` (for example /projects). Only an absolute http(s) URL is used as-is.\n" +
+		"- Every goto is an absolute http(s) URL, for example http://172.17.0.1:3000/projects. A relative path is rejected.\n" +
 		"- Every narrated step needs narration text for every selected language.\n" +
 		"- No login steps: authentication comes from the script's optional `storageState`.\n\n" +
 		"Script format (JSON Schema):\n" + string(script.SchemaJSON()) + "\n\n" +
@@ -317,10 +317,8 @@ func (h handlers) explorePage(ctx context.Context, _ *mcp.CallToolRequest, in ex
 	if !script.AbsoluteHTTP(in.URL) {
 		return nil, exploreOut{}, fmt.Errorf("url must be an absolute http or https URL: %s", in.URL)
 	}
-	// The url is also the base, so a relative goto in actions resolves against
-	// the page being explored (BR-010, decision 59).
 	out, err := h.Explorer.Explore(ctx, explorer.Input{
-		BaseURL: in.URL, StorageState: in.StorageState, URL: in.URL, Actions: actions,
+		StorageState: in.StorageState, URL: in.URL, Actions: actions,
 	})
 	var f *failure.Failure
 	if errors.As(err, &f) {

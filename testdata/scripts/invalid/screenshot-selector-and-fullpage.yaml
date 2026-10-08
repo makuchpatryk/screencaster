@@ -1,5 +1,4 @@
 name: demo
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 steps:
   - screenshot: { selector: "#a", fullPage: true }

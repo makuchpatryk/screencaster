@@ -30,7 +30,6 @@ type Session interface {
 // LaunchOptions configure the fresh browser context of one run: no video, no
 // cursor overlay.
 type LaunchOptions struct {
-	BaseURL      string
 	StorageState *script.StorageState
 }
 
@@ -38,8 +37,7 @@ type LaunchOptions struct {
 // index right before each step runs (CLI progress).
 type Input struct {
 	Steps        []script.Step
-	Dir          string // PNGs are written here, named by ShotName
-	BaseURL      string
+	Dir          string               // PNGs are written here, named by ShotName
 	StorageState *script.StorageState // nil: logged-out session
 	OnStep       func(i int)
 }
@@ -55,16 +53,13 @@ type Shooter struct {
 // *failure.Failure is returned. If ctx ends, ctx.Err() is returned. The
 // caller removes in.Dir.
 func (s Shooter) Shoot(ctx context.Context, in Input) ([]string, error) {
-	sess, err := s.Launch(ctx, LaunchOptions{BaseURL: in.BaseURL, StorageState: in.StorageState})
+	sess, err := s.Launch(ctx, LaunchOptions{StorageState: in.StorageState})
 	if err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 	defer sess.Abort()
 
-	ex, err := executor.New(sess, in.BaseURL, executor.Mode{})
-	if err != nil {
-		return nil, err
-	}
+	ex := executor.New(sess, executor.Mode{})
 	if err := sess.Start(); err != nil {
 		return nil, fmt.Errorf("start page: %w", err)
 	}

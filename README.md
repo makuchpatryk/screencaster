@@ -10,7 +10,7 @@ Write a YAML script, run one command, get a narrated MP4 of a website. Offline, 
 
 Pick a version on the [Releases](https://github.com/makuchpatryk/screencaster/releases) page; `screencaster --version` reports it (`dev` for a local build).
 
-**Docker, nothing else to install.** The image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg. Each release has a `screencaster-docker` script that runs it for you, with the flags below and the project folder mounted at `/work`:
+**Docker, nothing else to install.** The image holds both binaries, Chromium, the Piper TTS provider with both voices, and ffmpeg. Each release has a `screencaster-docker` script that runs it for you, with the project folder mounted at `/work`:
 
 ```bash
 ./screencaster-docker render demos/my-demo.yaml
@@ -19,10 +19,12 @@ Pick a version on the [Releases](https://github.com/makuchpatryk/screencaster/re
 Or run the image yourself:
 
 ```bash
-docker pull ghcr.io/makuchpatryk/screencaster:latest      # or :X.Y.Z
-docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway \
-  -v $(pwd):/work ghcr.io/makuchpatryk/screencaster screencaster render demos/my-demo.yaml
+docker run --rm -v $(pwd):/work ghcr.io/makuchpatryk/screencaster screencaster render demos/my-demo.yaml
 ```
+
+`--init` is optional here; it forwards SIGTERM, so a stopped render cleans up (the `screencaster-docker` script and `compose.yaml` set it). No other flag is needed.
+
+**An app on your machine.** Every `goto` in a demo is an absolute URL, so the demo carries the app's address as the container sees it. On Linux that is the Docker bridge IP, `172.17.0.1` by default (`docker run --rm --entrypoint sh ghcr.io/makuchpatryk/screencaster -c 'ip route'` shows it as the default gateway): `goto: http://172.17.0.1:3000/projects`. On Docker Desktop (macOS, Windows) use `http://host.docker.internal:3000/projects`. The app must listen on `0.0.0.0`, not only `127.0.0.1`, and a firewall (ufw, nftables) must let the bridge reach it.
 
 The image is linux/amd64 only (Piper is pinned to its x86_64 build), so arm64 hosts run it under emulation. `compose.yaml` and the MCP example below use the local name `screencaster`; after a pull, `docker tag ghcr.io/makuchpatryk/screencaster:latest screencaster` makes it so (compose wants `screencaster:piper`).
 
@@ -55,9 +57,9 @@ sudo ./screencaster setup            # downloads and installs everything, once
    make image              # builds the base, then providers/piper (tags screencaster:piper and screencaster)
    docker compose run --rm screencaster render demos/my-demo.yaml
    ```
-   - `compose.yaml` sets `--init` (forwards SIGTERM, so a stopped render cleans up), `--shm-size=1g`, the `host.docker.internal` host mapping and the `.:/work` mount.
-   - The host mapping lets `baseUrl: http://host.docker.internal:3000` reach an app on the host (Linux).
-   - Plain Docker works too: `docker run --rm --init --shm-size=1g --add-host=host.docker.internal:host-gateway -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml`.
+   - `compose.yaml` sets `--init` (forwards SIGTERM, so a stopped render cleans up) and the `.:/work` mount.
+   - An app on the host is reached by its address in the demo's `goto` URLs (see above): `172.17.0.1` on Linux, `host.docker.internal` on Docker Desktop.
+   - Plain Docker works too: `docker run --rm -v $(pwd):/work screencaster screencaster render demos/my-demo.yaml`.
    - The container runs as root: the rendered files belong to root.
    - The TTS provider comes from the image's environment: the Piper image sets `SCREENCASTER_TTS=piper` plus `SCREENCASTER_PIPER_BIN` and `SCREENCASTER_PIPER_VOICES`. An unset `SCREENCASTER_TTS` means `piper` at the `setup` install dir (`/opt/screencaster/piper`); both binaries exit at startup when the name is unknown or the Piper binary is not there, so a hand-built image must set the three variables. `make image-base` builds the same image without any provider; each provider is a folder `providers/<name>/` with its own `Dockerfile`, built on it by `make image PROVIDER=<name>` (default `piper`).
    - The MCP server (`screencaster-mcp`) runs from the same image with `docker run -i`, see [Claude Code (MCP)](#claude-code-mcp).
@@ -65,10 +67,9 @@ sudo ./screencaster setup            # downloads and installs everything, once
 3. **Write a demo** (`demos/my-demo.yaml`). One file holds everything: the target app, the optional login and the steps. Every path in a demo (`outputDir`, an intro or outro `image`) is relative to the demo file's folder and must stay inside the working directory (`/work` in Docker):
    ```yaml
    name: my-demo
-   baseUrl: http://host.docker.internal:3000   # required, absolute http(s) URL
    storageState:                               # optional; omit for a public site
      cookies:
-       - {name: session, value: <value>, domain: host.docker.internal, path: /}
+       - {name: session, value: <value>, domain: 172.17.0.1, path: /}
    outputDir: output                           # optional, default output (next to the demo)
    languages: [en, pl]
    meta:
@@ -79,7 +80,7 @@ sudo ./screencaster setup            # downloads and installs everything, once
      image: assets/logo.png                    # your own picture instead (PNG or JPEG)
    outro: false                                # no end card
    steps:
-     - goto: /projects
+     - goto: http://172.17.0.1:3000/projects   # always an absolute http(s) URL
      - click: role=button[name="New project"]
        narration:
          en: Click the New project button.
@@ -88,7 +89,7 @@ sudo ./screencaster setup            # downloads and installs everything, once
    ```
    `narration` is optional on every step; a step without it is silent. A step that has it needs an entry for every selected language, and an empty string (`en: ""`) keeps the step silent in that language.
 
-   `storageState` has the shape of Playwright's `context.storageState()` (`cookies`, `origins` with `localStorage`); paste an exported file here as it is (JSON is valid YAML). It holds live session secrets, so keep a demo that has one out of git. A demo for a public site is just `name`, `baseUrl` and `steps`: no other file is needed. A `screencaster.yaml` from an earlier version is ignored (with a warning); move its fields into the demo.
+   `storageState` has the shape of Playwright's `context.storageState()` (`cookies`, `origins` with `localStorage`); paste an exported file here as it is (JSON is valid YAML). It holds live session secrets, so keep a demo that has one out of git. A demo for a public site is just `name` and `steps`: no other file is needed. Every `goto` is an absolute URL: a relative path such as `/projects` is rejected, and a demo that still has `baseUrl` gets one error that says where the address goes now. A `screencaster.yaml` from an earlier version is ignored (with a warning); move its fields into the demo.
 
    **Start and end cards.** Every video starts with a 3 s card (the `meta` title and description) and ends with a 3 s card (a closing line in the video's language and the title), so it looks finished without an editing step. `intro` and `outro` change a card: `image` shows your picture full-frame (scaled to fit on a dark background; give it instead of `title` and `subtitle`), `title` and `subtitle` change the text, `durationMs` the time (500 to 10000), and `false` drops the card. The video is 6 s longer than the recording; use `intro: false` and `outro: false` for the plain recording. A demo for `demos/my-demo.yaml` with a logo keeps it in `demos/assets/logo.png`.
 
@@ -96,9 +97,8 @@ sudo ./screencaster setup            # downloads and installs everything, once
    ```yaml
    name: projects-screens
    type: screenshots
-   baseUrl: http://host.docker.internal:3000
    steps:
-     - goto: /projects
+     - goto: http://172.17.0.1:3000/projects
      - screenshot: true                         # 01.png, the viewport
      - screenshot: { fullPage: true }           # 02.png
      - click: role=button[name="New project"]
@@ -178,7 +178,7 @@ E2E runs in CI on every push and PR (`e2e` job) and locally with `make e2e`. Run
   "mcpServers": {
     "screencaster": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "--init", "--add-host=host.docker.internal:host-gateway",
+      "args": ["run", "-i", "--rm", "--init",
                "-v", "<project>:/work", "screencaster", "screencaster-mcp"]
     }
   }
@@ -186,7 +186,7 @@ E2E runs in CI on every push and PR (`e2e` job) and locally with `make e2e`. Run
 ```
 
 - Tools: `render_video` (validates, queues a job, returns `jobId` and `position`), `take_screenshots` (the same for a `type: screenshots` script; `get_render_status` then lists the PNG paths), `get_render_status`, `explore_page` (takes an absolute `url` and an optional inline `storageState`; returns the accessibility tree with a ready-to-use selector on every interactive element) and `get_options` (installed languages and voices, audiences, existing demos).
-- Prompt: `/mcp__screencaster__create_demo [description]` asks for languages, voices, audience, title, base URL and login (if any) in one message, explores the app, writes `demos/<name>.yaml` and renders it.
+- Prompt: `/mcp__screencaster__create_demo [description]` asks for languages, voices, audience, title, the app's address and login (if any) in one message, explores the app, writes `demos/<name>.yaml` and renders it.
 - Jobs run one at a time, oldest first, and are kept in `.screencaster/jobs.db`. Jobs still queued or running when the server stops are marked `failed` with `interrupted` at the next start; they do not resume.
 - A CLI render and a queued job never run together: both take `.screencaster/render.lock`, and a job waits for it while still `queued`.
 - `explore_page` does not wait for the queue and may overlap a running render, which can make the video's pacing jitter.

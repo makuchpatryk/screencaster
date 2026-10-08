@@ -14,7 +14,6 @@ import (
 )
 
 const twoStepsEnPl = `name: demo
-baseUrl: http://host.docker.internal:3000
 storageState:
   cookies:
     - {name: session, value: abc, domain: host.docker.internal, path: /}
@@ -23,7 +22,7 @@ meta:
   title: Demo title
   description: Demo description
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
     narration:
       en: Hello.
       pl: Cześć.
@@ -130,7 +129,6 @@ func (f *fakes) Assemble(_ context.Context, in AssembleRequest) (Assembly, error
 	return Assembly{DurationMs: 4200, MarkerEnd: 1520 * time.Millisecond}, nil
 }
 
-
 var jobStart = time.Date(2026, 10, 3, 10, 15, 0, 0, time.UTC)
 
 func (f *fakes) deps(files *memFS) Deps {
@@ -199,8 +197,8 @@ func TestRender_clipsReachRecorderAndAssembler(t *testing.T) { // FR-007, FR-009
 	if want := map[int]time.Duration{0: 6 * time.Second, 2: 6 * time.Second}; !reflect.DeepEqual(en.Clips, want) {
 		t.Errorf("recorder clips = %v, want %v (keyed by step, unnarrated step absent)", en.Clips, want)
 	}
-	if en.BaseURL != "http://host.docker.internal:3000" || en.StorageState == nil || len(en.StorageState.Cookies) != 1 || en.StorageState.Cookies[0].Name != "session" {
-		t.Errorf("recorder context = %q, %+v", en.BaseURL, en.StorageState)
+	if en.StorageState == nil || len(en.StorageState.Cookies) != 1 || en.StorageState.Cookies[0].Name != "session" {
+		t.Errorf("recorder storage state = %+v", en.StorageState)
 	}
 
 	asm := f.asmIn[0]
@@ -313,7 +311,7 @@ func TestRender_progressNamesEachStep(t *testing.T) { // FR-011 progress on stde
 	if _, err := Render(context.Background(), f.deps(files), req); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"[en] 1/3 goto /projects", "[en] 2/3 click #new", "[en] 3/3 click #save"}
+	want := []string{"[en] 1/3 goto http://host.docker.internal:3000/projects", "[en] 2/3 click #new", "[en] 3/3 click #save"}
 	if !reflect.DeepEqual(lines, want) {
 		t.Errorf("progress = %q, want %q", lines, want)
 	}

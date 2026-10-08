@@ -24,7 +24,7 @@ type Action interface {
 
 // The actions, one type per shape, so the executor needs no field checks.
 type (
-	Goto       struct{ URL string } // relative to baseUrl, or absolute (BR-010)
+	Goto       struct{ URL string } // absolute http(s) URL (BR-010)
 	Click      struct{ Selector string }
 	Hover      struct{ Selector string }
 	Fill       struct{ Selector, Value string } // an empty Value clears the field

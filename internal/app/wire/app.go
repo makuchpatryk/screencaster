@@ -86,7 +86,6 @@ func Explorer() explorer.Explorer {
 // sync marker (FR-004, FR-006, decision 69).
 func launchRecording(ctx context.Context, o recorder.LaunchOptions) (recorder.Session, error) {
 	s, err := launcher().Launch(ctx, browser.Options{
-		BaseURL:      o.BaseURL,
 		StorageState: o.StorageState,
 		VideoDir:     o.VideoDir,
 		StartImage:   o.StartImage,
@@ -102,7 +101,7 @@ func launchRecording(ctx context.Context, o recorder.LaunchOptions) (recorder.Se
 // launchShots opens an unrecorded session with no cursor overlay: a screenshots
 // run has no video to show one in (decision 75).
 func launchShots(ctx context.Context, o shooter.LaunchOptions) (shooter.Session, error) {
-	s, err := launcher().Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
+	s, err := launcher().Launch(ctx, browser.Options{StorageState: o.StorageState})
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +110,7 @@ func launchShots(ctx context.Context, o shooter.LaunchOptions) (shooter.Session,
 
 // launchExploration opens a plain, unrecorded session (FR-017).
 func launchExploration(ctx context.Context, o explorer.LaunchOptions) (explorer.Session, error) {
-	s, err := launcher().Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
+	s, err := launcher().Launch(ctx, browser.Options{StorageState: o.StorageState})
 	if err != nil {
 		return nil, err
 	}

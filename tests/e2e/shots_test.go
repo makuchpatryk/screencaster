@@ -20,10 +20,9 @@ import (
 // viewport again, which must show nothing of the markers.
 const shotsScript = `name: e2e-shots
 type: screenshots
-baseUrl: %s
-%s
+%[2]s
 steps:
-  - goto: /shots.html
+  - goto: %[1]s/shots.html
   - screenshot: true
   - screenshot: { fullPage: true }
   - screenshot: { selector: "#panel" }
@@ -37,10 +36,9 @@ steps:
 // it must remove the four numbered shots it no longer writes.
 const shotsShortScript = `name: e2e-shots
 type: screenshots
-baseUrl: %s
-%s
+%[2]s
 steps:
-  - goto: /shots.html
+  - goto: %[1]s/shots.html
   - screenshot: true
   - screenshot: { selector: "#panel" }
 `
@@ -49,10 +47,9 @@ steps:
 // strict, so the annotation fails at once instead of after the 30 s timeout.
 const shotsFailScript = `name: e2e-shots
 type: screenshots
-baseUrl: %s
-%s
+%[2]s
 steps:
-  - goto: /shots.html
+  - goto: %[1]s/shots.html
   - screenshot: true
   - screenshot: { annotate: { selector: ".dup", box: true } }
 `

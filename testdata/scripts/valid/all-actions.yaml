@@ -1,7 +1,6 @@
 name: all-actions
-baseUrl: http://host.docker.internal:3000
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
   - click: role=button[name="New project"]
   - fill: { selector: 'input[name="name"]', value: My Project }
   - fill: { selector: 'input[name="notes"]', value: "" }

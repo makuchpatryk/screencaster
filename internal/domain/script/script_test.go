@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,7 @@ func TestParse_validSamples(t *testing.T) {
 		{"valid/en-pl.yaml", []string{"en", "pl"}, 2},
 		{"valid/all-actions.yaml", nil, 12},
 		{"valid/all-target-fields.yaml", nil, 1},
+		{"valid/no-baseurl.yaml", nil, 1},
 		{"valid/cards.yaml", nil, 1},
 		{"valid/silent-narration.yaml", []string{"en", "pl"}, 2},
 		{"valid/cards-text.yaml", nil, 1},
@@ -80,7 +82,7 @@ func TestParse_decodesFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Action{
-		Goto{URL: "/projects"},
+		Goto{URL: "http://host.docker.internal:3000/projects"},
 		Click{Selector: `role=button[name="New project"]`},
 		Fill{Selector: `input[name="name"]`, Value: "My Project"},
 		Fill{Selector: `input[name="notes"]`, Value: ""}, // clears the field
@@ -118,8 +120,8 @@ func TestParse_decodesTargetFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.BaseURL != "https://example.com/app" || s.OutputDir != "videos" {
-		t.Errorf("target fields = %q %q", s.BaseURL, s.OutputDir)
+	if s.OutputDir != "videos" {
+		t.Errorf("OutputDir = %q", s.OutputDir)
 	}
 	want := &StorageState{
 		Cookies: []Cookie{
@@ -185,8 +187,8 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/no-action.yaml", "/steps/0", oneAction},
 		{"invalid/press-object-without-key.yaml", "/steps/0/press", "key"},
 		{"invalid/fill-missing-value.yaml", "/steps/0/fill", "value"},
-		{"invalid/missing-baseurl.yaml", "", "baseUrl"},
-		{"invalid/baseurl-relative.yaml", "/baseUrl", "baseUrl must be an absolute http or https URL: /app"},
+		{"invalid/baseurl-removed.yaml", "/baseUrl", baseURLRemovedHint},
+		{"invalid/goto-relative.yaml", "/steps/0/goto", "goto must be an absolute http or https URL: /projects"},
 		{"invalid/cookie-no-domain.yaml", "/storageState/cookies/0", ""},
 		{"invalid/storagestate-is-path.yaml", "/storageState", ""},
 		{"invalid/intro-true.yaml", "/intro", ""},
@@ -238,7 +240,8 @@ func TestParse_oneRootCausePerBrokenStep(t *testing.T) {
 		{"invalid/unknown-action.yaml", "/steps/0"},
 		{"invalid/unknown-step-field.yaml", "/steps/0"},
 		{"invalid/two-actions.yaml", "/steps/0"},
-		{"invalid/baseurl-relative.yaml", "/baseUrl"},
+		{"invalid/baseurl-removed.yaml", "/baseUrl"},
+		{"invalid/goto-relative.yaml", "/steps/0/goto"},
 		{"invalid/intro-true.yaml", "/intro"},
 		{"invalid/intro-image-and-title.yaml", "/intro"},
 		{"invalid/intro-image-not-png.yaml", "/intro/image"},
@@ -286,8 +289,8 @@ func TestParse_missingActionIsOneError(t *testing.T) {
 // ahead of the schema errors (decision 70).
 func TestParse_oldStepFormGetsOneHint(t *testing.T) {
 	// Inline, not a testdata sample: no repo YAML keeps the old form.
-	old := "name: demo\nbaseUrl: http://x\nsteps:\n" +
-		"  - goto: /\n" +
+	old := "name: demo\nsteps:\n" +
+		"  - goto: http://x/\n" +
 		"  - action: click\n    selector: \"#a\"\n" +
 		"  - action: wait\n    ms: 500\n"
 	errs := parseErrors(t, []byte(old))
@@ -310,7 +313,8 @@ func TestParse_eachActionShape(t *testing.T) {
 		want    Action // nil: invalid
 		pointer string // of the error when invalid
 	}{
-		{`goto: /p`, Goto{URL: "/p"}, ""},
+		{`goto: http://x/p`, Goto{URL: "http://x/p"}, ""},
+		{`goto: /p`, nil, "/steps/0/goto"},
 		{`goto: ""`, nil, "/steps/0/goto"},
 		{`click: "#a"`, Click{Selector: "#a"}, ""},
 		{`click: {selector: "#a"}`, nil, "/steps/0/click"},
@@ -332,7 +336,7 @@ func TestParse_eachActionShape(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.step, func(t *testing.T) {
-			s, err := Parse([]byte("name: demo\nbaseUrl: http://x\nsteps:\n  - " + tt.step + "\n"))
+			s, err := Parse([]byte("name: demo\nsteps:\n  - " + tt.step + "\n"))
 			if tt.want != nil {
 				if err != nil {
 					t.Fatalf("Parse() error = %v", err)
@@ -564,7 +568,8 @@ func TestParseSteps_appliesTheScriptRules(t *testing.T) {
 		{"no steps", nil, ""},
 		{"click with selector", []string{`{"click": "#a"}`}, ""},
 		{"scroll to zero", []string{`{"scroll": {"y": 0}}`}, ""},
-		{"click without selector", []string{`{"goto": "/"}`, `{"click": ""}`}, "/steps/1/click"},
+		{"click without selector", []string{`{"goto": "http://x/"}`, `{"click": ""}`}, "/steps/1/click"},
+		{"relative goto", []string{`{"goto": "/p"}`}, "/steps/0/goto"},
 		{"unknown action", []string{`{"drag": "#a"}`}, "/steps/0"},
 		{"old form", []string{`{"action": "click", "selector": "#a"}`}, "/steps/0"},
 	}
@@ -630,7 +635,7 @@ func TestParse_decodesScreenshotShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Action{
-		Goto{URL: "/projects"},
+		Goto{URL: "http://host.docker.internal:3000/projects"},
 		Screenshot{},
 		Screenshot{},
 		Screenshot{FullPage: true},
@@ -650,7 +655,7 @@ func TestParse_decodesScreenshotShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantA := []Action{
-		Goto{URL: "/projects"},
+		Goto{URL: "http://host.docker.internal:3000/projects"},
 		Screenshot{Annotate: &Annotate{Selector: "#create", Box: true}},
 		Screenshot{Selector: "#list", Annotate: &Annotate{Selector: "#create", Box: true, Arrow: true, Dim: true, Label: "Click Create"}},
 		Screenshot{FullPage: true, Annotate: &Annotate{Selector: "#create", Label: "Here"}},
@@ -763,7 +768,7 @@ func TestStep_screenshotJSONRoundTrip(t *testing.T) {
 // explore_page has no files to write, so a screenshot step in its actions is
 // refused by Parse, before the executor's "unknown action".
 func TestParseSteps_rejectsScreenshot(t *testing.T) {
-	_, err := ParseSteps([]json.RawMessage{json.RawMessage(`{"goto": "/"}`), json.RawMessage(`{"screenshot": true}`)})
+	_, err := ParseSteps([]json.RawMessage{json.RawMessage(`{"goto": "http://x/"}`), json.RawMessage(`{"screenshot": true}`)})
 	var ve failure.ValidationErrors
 	if !errors.As(err, &ve) || len(ve) != 1 || ve[0].Pointer != "/steps/1/screenshot" {
 		t.Errorf("ParseSteps() error = %v, want one error at /steps/1/screenshot", err)
@@ -777,5 +782,43 @@ func TestExampleScreenshotsYAML_isValid(t *testing.T) {
 	}
 	if s.Kind() != TypeScreenshots {
 		t.Errorf("Kind() = %q, want %q", s.Kind(), TypeScreenshots)
+	}
+}
+
+// baseUrl was removed (decision 78): a script that still has it gets the hint
+// and nothing else, even beside other problems.
+func TestParse_baseURLGetsOnlyTheHint(t *testing.T) {
+	errs := parseErrors(t, []byte("name: BAD\nbaseUrl: http://x\nsteps: []\n"))
+	want := failure.ValidationErrors{{Pointer: "/baseUrl", Message: baseURLRemovedHint}}
+	if !reflect.DeepEqual(errs, want) {
+		t.Errorf("errors = %v, want %v", errs, want)
+	}
+}
+
+// A relative goto is reported at its step; the absolute ones pass (BR-010).
+func TestParse_everyRelativeGotoIsReported(t *testing.T) {
+	errs := parseErrors(t, []byte("name: demo\nsteps:\n  - goto: /a\n  - goto: https://x/y\n  - goto: b\n"))
+	var got []string
+	for _, e := range errs {
+		got = append(got, e.Pointer)
+	}
+	if want := []string{"/steps/0/goto", "/steps/2/goto"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("pointers = %v, want %v", got, want)
+	}
+}
+
+func TestSchema_hasNoBaseURL(t *testing.T) {
+	var schema struct {
+		Required   []string       `json:"required"`
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(SchemaJSON(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := schema.Properties["baseUrl"]; ok {
+		t.Error("schema still has a baseUrl property")
+	}
+	if slices.Contains(schema.Required, "baseUrl") {
+		t.Error("schema still requires baseUrl")
 	}
 }

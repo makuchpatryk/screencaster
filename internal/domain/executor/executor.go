@@ -7,7 +7,6 @@ package executor
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"time"
 
 	"screencaster/internal/domain/failure"
@@ -52,18 +51,13 @@ type Mode struct{ Visuals bool }
 // Executor runs steps against one page.
 type Executor struct {
 	page Page
-	base *url.URL
 	mode Mode
 }
 
-// New returns an executor that resolves relative goto URLs against baseURL
-// (BR-010). baseURL is an absolute URL validated by script.Parse.
-func New(p Page, baseURL string, m Mode) (*Executor, error) {
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse baseUrl: %w", err)
-	}
-	return &Executor{page: p, base: base, mode: m}, nil
+// New returns an executor for page p. goto URLs are absolute, checked by
+// script.Parse (BR-010), and go to the page as they are.
+func New(p Page, m Mode) *Executor {
+	return &Executor{page: p, mode: m}
 }
 
 // Run executes step s, the i-th (1-based) of the script. Any error comes back
@@ -82,7 +76,7 @@ func (e *Executor) Run(ctx context.Context, i int, s script.Step) error {
 func (e *Executor) dispatch(ctx context.Context, a script.Action) error {
 	switch a := a.(type) {
 	case script.Goto:
-		return e.page.Goto(e.resolve(a.URL))
+		return e.page.Goto(a.URL)
 	case script.Click:
 		return e.interact(a.Selector, func() error { return e.page.Click(a.Selector) })
 	case script.Hover:
@@ -121,15 +115,6 @@ func (e *Executor) typeDelay() time.Duration {
 		return TypeDelay
 	}
 	return 0
-}
-
-// resolve keeps absolute URLs and joins the rest to baseUrl (BR-010).
-func (e *Executor) resolve(raw string) string {
-	ref, err := url.Parse(raw)
-	if err != nil || ref.IsAbs() {
-		return raw
-	}
-	return e.base.ResolveReference(ref).String()
 }
 
 // sleep waits d or until ctx ends.

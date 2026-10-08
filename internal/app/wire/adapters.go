@@ -31,7 +31,6 @@ func recordInput(r renderer.RecordRequest) recorder.Input {
 		Clips:        r.Clips,
 		Lang:         r.Lang,
 		Dir:          r.Dir,
-		BaseURL:      r.BaseURL,
 		StorageState: r.StorageState,
 		StartImage:   r.StartImage,
 		OnStep:       r.OnStep,
@@ -49,7 +48,6 @@ func shootInput(r renderer.ShootRequest) shooter.Input {
 	return shooter.Input{
 		Steps:        r.Steps,
 		Dir:          r.Dir,
-		BaseURL:      r.BaseURL,
 		StorageState: r.StorageState,
 		OnStep:       r.OnStep,
 	}

@@ -44,7 +44,6 @@ type Session interface {
 
 // LaunchOptions configure the fresh context of one call (FR-017).
 type LaunchOptions struct {
-	BaseURL      string
 	StorageState *script.StorageState
 }
 
@@ -53,9 +52,8 @@ type Explorer struct {
 	Launch func(ctx context.Context, o LaunchOptions) (Session, error)
 }
 
-// Input is one explore call. URL is resolved like a goto step (BR-010).
+// Input is one explore call. URL is an absolute http(s) URL (BR-010).
 type Input struct {
-	BaseURL      string
 	StorageState *script.StorageState
 	URL          string
 	Actions      []script.Step
@@ -81,7 +79,7 @@ func (e Explorer) Explore(ctx context.Context, in Input) (Output, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	sess, err := e.Launch(ctx, LaunchOptions{BaseURL: in.BaseURL, StorageState: in.StorageState})
+	sess, err := e.Launch(ctx, LaunchOptions{StorageState: in.StorageState})
 	if err != nil {
 		return Output{}, fmt.Errorf("launch browser: %w", err)
 	}
@@ -90,10 +88,7 @@ func (e Explorer) Explore(ctx context.Context, in Input) (Output, error) {
 		return Output{}, fmt.Errorf("start page: %w", err)
 	}
 
-	ex, err := executor.New(sess, in.BaseURL, executor.Mode{Visuals: false})
-	if err != nil {
-		return Output{}, err
-	}
+	ex := executor.New(sess, executor.Mode{Visuals: false})
 	steps := append([]script.Step{{Action: script.Goto{URL: in.URL}}}, in.Actions...)
 	var runErr error
 	for i, s := range steps {

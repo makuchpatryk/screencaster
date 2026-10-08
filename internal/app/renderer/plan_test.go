@@ -14,26 +14,23 @@ import (
 
 const (
 	enOnly = `name: demo
-baseUrl: http://host.docker.internal:3000
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
     narration:
       en: Hello.
 `
 	enPl = `name: demo
-baseUrl: http://host.docker.internal:3000
 languages: [en, pl]
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
     narration:
       en: Hello.
       pl: Cześć.
 `
 	enPlMissingPl = `name: demo
-baseUrl: http://host.docker.internal:3000
 languages: [en, pl]
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
     narration:
       en: Hello.
 `
@@ -92,7 +89,7 @@ func TestPrepare_validPlan(t *testing.T) {
 			if len(plan.Voices) != len(tt.wantLangs) {
 				t.Errorf("Voices = %v, want only selected languages", plan.Voices)
 			}
-			if plan.Script.Name != "demo" || plan.Script.BaseURL != "http://host.docker.internal:3000" {
+			if plan.Script.Name != "demo" {
 				t.Errorf("plan = %+v", plan)
 			}
 		})
@@ -144,16 +141,18 @@ func TestPrepare_failsBeforeAnyWork(t *testing.T) {
 		want     func(dir string) string
 	}{
 		{
-			name:   "baseUrl required (FR-001 AC1)",
+			name:   "goto must be absolute (BR-010)",
 			script: "name: demo\nsteps:\n  - goto: /\n",
 			cat:    stock,
-			want:   func(string) string { return "missing property 'baseUrl'" },
+			want:   func(string) string { return "/steps/0/goto: goto must be an absolute http or https URL: /" },
 		},
 		{
-			name:   "baseUrl must be absolute",
+			name:   "baseUrl was removed: the hint and nothing else (decision 78)",
 			script: "name: demo\nbaseUrl: /app\nsteps:\n  - goto: /\n",
 			cat:    stock,
-			want:   func(string) string { return "/baseUrl: baseUrl must be an absolute http or https URL: /app" },
+			want: func(string) string {
+				return "/baseUrl: baseUrl was removed: put the app's address into each goto URL, e.g. goto: http://172.17.0.1:3000/projects"
+			},
 		},
 		{
 			name: "script file missing",
@@ -327,14 +326,14 @@ func TestPrepare_ignoresScreencasterYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Script.BaseURL != "http://host.docker.internal:3000" || plan.Script.StorageState != nil ||
+	if plan.Script.StorageState != nil ||
 		plan.OutputDir != filepath.Join(dir, "demos", "output") || plan.Voices["en"] != "en_US-ryan-high" {
 		t.Errorf("a stray screencaster.yaml changed the plan: %+v", plan)
 	}
 }
 
 func TestPrepare_schemaErrorsAreValidationErrors(t *testing.T) {
-	dir, files := workDir("name: BAD NAME\nbaseUrl: http://x\nsteps: []\n")
+	dir, files := workDir("name: BAD NAME\nsteps: []\n")
 	_, err := Prepare(Request{WorkDir: dir, ScriptPath: "demos/demo.yaml"}, stock, files)
 	var ve failure.ValidationErrors
 	if !errors.As(err, &ve) || len(ve) != 2 {

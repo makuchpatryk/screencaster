@@ -17,7 +17,7 @@ import (
 
 func newExplorer() explorer.Explorer {
 	return explorer.Explorer{Launch: func(ctx context.Context, o explorer.LaunchOptions) (explorer.Session, error) {
-		s, err := browser.Launcher{}.Launch(ctx, browser.Options{BaseURL: o.BaseURL, StorageState: o.StorageState})
+		s, err := browser.Launcher{}.Launch(ctx, browser.Options{StorageState: o.StorageState})
 		if err != nil {
 			return nil, err
 		}
@@ -44,7 +44,6 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 	dir := project(t, base)
 
 	out, err := newExplorer().Explore(context.Background(), explorer.Input{
-		BaseURL:      base + "/projects.html",
 		StorageState: fixtureState,
 		URL:          base + "/projects.html",
 		Actions:      []script.Step{{Action: script.Click{Selector: `role=button[name="New project"]`}}},
@@ -62,8 +61,8 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 	name := selectorFor(t, out.Snapshot, "textbox", "Name")
 	create := selectorFor(t, out.Snapshot, "button", "Create")
 
-	body := "name: explored\nbaseUrl: " + base + "\n" + stateYAML + "\nsteps:\n" +
-		"  - goto: /projects.html\n" +
+	body := "name: explored\n" + stateYAML + "\nsteps:\n" +
+		"  - goto: " + base + "/projects.html\n" +
 		"  - click: '" + newProject + "'\n" +
 		"  - fill: {selector: '" + name + "', value: Demo}\n" +
 		"  - click: '" + create + "'\n" +
@@ -85,7 +84,6 @@ func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
 	base := fixtureApp(t)
 	ex := newExplorer()
 	in := explorer.Input{
-		BaseURL:      base + "/names.html",
 		StorageState: fixtureState,
 		URL:          base + "/names.html",
 	}
@@ -116,7 +114,6 @@ func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
 func TestExplore_failedActionKeepsSnapshot(t *testing.T) {
 	base := fixtureApp(t)
 	out, err := newExplorer().Explore(context.Background(), explorer.Input{
-		BaseURL:      base + "/projects.html",
 		StorageState: fixtureState,
 		URL:          base + "/projects.html",
 		Actions:      []script.Step{{Action: script.Click{Selector: "#does-not-exist"}}},

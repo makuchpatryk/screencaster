@@ -1,8 +1,7 @@
 name: shots-areas
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
   - screenshot: true
   - screenshot: {}
   - screenshot: { fullPage: true }

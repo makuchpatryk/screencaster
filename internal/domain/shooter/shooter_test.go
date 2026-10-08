@@ -72,9 +72,9 @@ func shot(sel string) script.Step {
 func TestShoot_runsStepsInOrderAndCapturesAtShotSteps(t *testing.T) {
 	sess := &fakeSession{}
 	steps := []script.Step{
-		{Action: script.Goto{URL: "/p"}}, shot(""), click("#a"), shot("#e"),
+		{Action: script.Goto{URL: "http://x/p"}}, shot(""), click("#a"), shot("#e"),
 	}
-	paths, err := newShooter(sess, nil).Shoot(context.Background(), Input{Steps: steps, Dir: "/out", BaseURL: "http://x"})
+	paths, err := newShooter(sess, nil).Shoot(context.Background(), Input{Steps: steps, Dir: "/out"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,12 @@ func TestShoot_launchesWithoutVideoWithTheScriptsTarget(t *testing.T) {
 	state := &script.StorageState{Cookies: []script.Cookie{{Name: "s", Value: "v", URL: "http://x"}}}
 	var got LaunchOptions
 	_, err := newShooter(&fakeSession{}, &got).Shoot(context.Background(),
-		Input{Steps: []script.Step{shot("")}, Dir: "/out", BaseURL: "http://x", StorageState: state})
+		Input{Steps: []script.Step{shot("")}, Dir: "/out", StorageState: state})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.BaseURL != "http://x" || got.StorageState != state {
-		t.Errorf("launch options = %+v, want the base URL and storage state", got)
+	if got.StorageState != state {
+		t.Errorf("launch options = %+v, want the storage state", got)
 	}
 }
 

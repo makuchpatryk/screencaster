@@ -25,8 +25,6 @@ func TestDockerScript_runsTheTaggedImageWithTheRenderFlags(t *testing.T) {
 		{"fails on error", "set -eu"},
 		{"removes the container", "docker run --rm"},
 		{"forwards signals", "--init"},
-		{"chromium shared memory", "--shm-size=1g"},
-		{"reaches the host app", "--add-host=host.docker.internal:host-gateway"},
 		{"mounts the project", `-v "$PWD:/work"`},
 		{"works in the project", "-w /work"},
 		{"the image has no ENTRYPOINT", "--entrypoint screencaster"},
@@ -39,6 +37,17 @@ func TestDockerScript_runsTheTaggedImageWithTheRenderFlags(t *testing.T) {
 				t.Errorf("script lacks %q", tt.want)
 			}
 		})
+	}
+}
+
+// Decision 79: Chromium needs no --shm-size and a host app is reached by IP, so
+// neither flag is in the wrapper.
+func TestDockerScript_hasNoShmSizeAndNoAddHost(t *testing.T) {
+	script := filledScript(t, "9.9.9")
+	for _, flag := range []string{"--shm-size", "--add-host"} {
+		if strings.Contains(script, flag) {
+			t.Errorf("script contains %q", flag)
+		}
 	}
 }
 

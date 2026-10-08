@@ -21,9 +21,9 @@ import (
 func TestRecord_fixtureApp(t *testing.T) {
 	base := fixtureApp(t)
 	steps := []script.Step{
-		{Action: script.Goto{URL: "/index.html"}},
+		{Action: script.Goto{URL: base + "/index.html"}},
 		{Action: script.WaitFor{Selector: "#logged-in"}}, // visible only with the storageState cookie
-		{Action: script.Goto{URL: "/projects.html"}},
+		{Action: script.Goto{URL: base + "/projects.html"}},
 		{Action: script.Click{Selector: "role=button[name=\"New project\"]"}},
 		{Action: script.Fill{Selector: "input[name=\"name\"]", Value: "Demo"}},
 		{Action: script.Select{Selector: "select[name=\"visibility\"]", Value: "private"}},
@@ -68,7 +68,7 @@ func TestRecord_startsDark(t *testing.T) {
 func TestRecord_twoRecordingsAreIndependent(t *testing.T) {
 	base := fixtureApp(t)
 	rec := newRecorder(t, nil)
-	steps := []script.Step{{Action: script.Goto{URL: "/index.html"}}, {Action: script.WaitFor{Selector: "#logged-in"}}}
+	steps := []script.Step{{Action: script.Goto{URL: base + "/index.html"}}, {Action: script.WaitFor{Selector: "#logged-in"}}}
 
 	en, err := rec.Record(context.Background(), recordInput(t, base, "en", steps))
 	if err != nil {
@@ -91,11 +91,11 @@ func TestRecord_missingSelectorAbortsWithinTimeout(t *testing.T) {
 	base := fixtureApp(t)
 	var launched time.Time
 	steps := []script.Step{
-		{Action: script.Goto{URL: "/index.html"}},
+		{Action: script.Goto{URL: base + "/index.html"}},
 		{Action: script.WaitFor{Selector: "#logged-in"}},
-		{Action: script.Goto{URL: "/projects.html"}},
+		{Action: script.Goto{URL: base + "/projects.html"}},
 		{Action: script.Click{Selector: "#does-not-exist"}},
-		{Action: script.Goto{URL: "/index.html"}},
+		{Action: script.Goto{URL: base + "/index.html"}},
 	}
 
 	_, err := newRecorder(t, &launched).Record(context.Background(), recordInput(t, base, "en", steps))
@@ -117,7 +117,7 @@ func TestRecord_missingSelectorAbortsWithinTimeout(t *testing.T) {
 // fail at once, naming the count, never click the first match.
 func TestBrowser_ambiguousSelectorFailsFast(t *testing.T) {
 	base := fixtureApp(t)
-	sess, err := browser.Launcher{}.Launch(context.Background(), browser.Options{BaseURL: base})
+	sess, err := browser.Launcher{}.Launch(context.Background(), browser.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,5 +155,5 @@ func TestBrowser_ambiguousSelectorFailsFast(t *testing.T) {
 
 func recordInput(t *testing.T, base, lang string, steps []script.Step) recorder.Input {
 	t.Helper()
-	return recorder.Input{Steps: steps, Lang: lang, Dir: t.TempDir(), BaseURL: base, StorageState: fixtureState}
+	return recorder.Input{Steps: steps, Lang: lang, Dir: t.TempDir(), StorageState: fixtureState}
 }

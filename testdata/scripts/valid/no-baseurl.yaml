@@ -1,5 +1,3 @@
 name: demo
-intro:
-  image: logo.gif
 steps:
   - goto: http://host.docker.internal:3000/

@@ -14,9 +14,8 @@ import (
 
 const shotsScript = `name: shots-one
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
   - screenshot: true
 `
 
@@ -147,10 +146,9 @@ func TestTakeScreenshots_invalidScriptListsEveryProblem(t *testing.T) {
 	e := newEnv(t)
 	e.writeFile("demos/bad.yaml", `name: bad
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 languages: [en]
 steps:
-  - goto: /
+  - goto: http://host.docker.internal:3000/
     narration: {en: Hello.}
 `)
 

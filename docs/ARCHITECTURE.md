@@ -1,6 +1,6 @@
 # screencaster — Architecture
 
-**Version:** 0.2 | **Date:** 2026-10-05 | **Based on:** [PRD v1.3](PRD.md) | **Code rules:** [CODE_QUALITY.md](CODE_QUALITY.md) | **Status:** Draft
+**Version:** 0.3 | **Date:** 2026-10-08 | **Based on:** [PRD v1.3](PRD.md) | **Code rules:** [CODE_QUALITY.md](CODE_QUALITY.md) | **Status:** Draft
 
 This document holds the structural rules: how the code is divided, what may depend on what, and the invariants the render pipeline keeps. *What* the product does is in the PRD; constants, formats and measurements live in the code and its tests. Requirement IDs (BR-, FR-, NFR-, BP-) link back to the PRD.
 
@@ -41,7 +41,7 @@ flowchart LR
     Core --> Chromium
     Core --> TTS
     Core --> FF
-    Chromium -- host.docker.internal --> App
+    Chromium -- "goto URLs (bridge IP on Linux)" --> App
 ```
 
 Two entry points are thin shells over one module's `internal/` packages. They share the pipeline and its wiring (`app/wire`).
@@ -129,7 +129,7 @@ sequenceDiagram
 
 Rules:
 
-1. **Validate first.** Everything checkable without a browser or TTS is checked before either starts: schema, `baseUrl`, narration per language, installed voices, paths inside the working directory (BR-011, FR-001, FR-002).
+1. **Validate first.** Everything checkable without a browser or TTS is checked before either starts: schema, absolute `goto` URLs, narration per language, installed voices, paths inside the working directory (BR-011, FR-001, FR-002).
 2. **Languages run sequentially**, each from a fresh browser context (FR-004).
 3. **TTS before browser**, because clip durations decide step timing (FR-003). `synthesizeAll` makes the clips of one language, at most `ttsWorkers` at a time (1 today, Decision 71); the failure reported is always the lowest failing step. Cards come right after TTS, so a card problem fails before the slow part.
 4. **Abort path.** The first step error cancels the context, closes the browser, deletes the temp dir and returns a `Failure`. Nothing reaches `outputDir`; a finished `en` is discarded when `pl` fails (BR-004).
@@ -214,7 +214,7 @@ One implementation of FR-005 semantics, two modes:
 | Records step offsets | yes | no |
 | Timeout per action | 30 s | 30 s |
 
-Same selectors, same URL resolution against `baseUrl` (BR-010), same error shape. That is the guarantee behind FR-017 AC3: a selector returned by `explore_page` works in a render.
+Same selectors, same absolute `goto` URLs passed through unchanged (BR-010, Decision 78), same error shape. That is the guarantee behind FR-017 AC3: a selector returned by `explore_page` works in a render.
 
 **Screenshot steps.** `screenshot` is a step action the executor does not run. `domain/shooter` intercepts it, because a capture needs an output path and a counter, which the executor (one step, no files) does not have; validation keeps it out of recordings and `explore_page`, and the executor's default case would return `unknown action` if one slipped through (decision 75). Every other step of a screenshots script runs through the executor in the mode `explore` uses (no visuals).
 
@@ -222,7 +222,7 @@ Same selectors, same URL resolution against `baseUrl` (BR-010), same error shape
 
 ## 8. `explore_page` design
 
-- Runs in a fresh, non-recorded context with the caller's `storageState`. The `url` is also the `baseURL`, so relative `goto`s in `actions` resolve against the explored page (Decision 59).
+- Runs in a fresh, non-recorded context with the caller's `storageState`. The `url` is absolute, and so is any `goto` in `actions` (Decisions 59, 78).
 - Replays `actions` through the executor in `explore` mode, then captures the page as an ARIA snapshot (Decision 47). Each named interactive line gets a ready-to-use selector, checked for uniqueness against the live page.
 - Output is capped (`truncated: true`).
 - On an action failure the tool returns `{step, action, target, message}` plus the snapshot at that moment (FR-017). The initial navigation is step 0.
@@ -275,7 +275,7 @@ stateDiagram-v2
 
 ```
 /work                          mounted project (rw)
-├── demos/*.yaml               scripts: baseUrl, optional storageState and outputDir (FR-001)
+├── demos/*.yaml               scripts: absolute goto URLs, optional storageState and outputDir (FR-001)
 ├── demos/assets/*             card pictures named by intro.image / outro.image
 ├── demos/output/              <name>.<lang>.<ts>.mp4, never overwritten
 │   └── <name>/screenshots/    NN.png of a screenshots script, overwritten on rerun (decision 73)
@@ -297,10 +297,10 @@ stateDiagram-v2
 - **Build order.** `make dev-image` builds `screencaster-dev-base`, then `screencaster-dev` (tags `:<provider>` and latest). `make image` builds `screencaster-base`, then `screencaster:<provider>` and `screencaster` (latest). `PROVIDER` defaults to `piper`. `compose.yaml` only runs the built image, since compose cannot chain the two builds.
 - **Provider selection.** The image sets `SCREENCASTER_TTS` (and the provider's own variables: `SCREENCASTER_PIPER_BIN`, `SCREENCASTER_PIPER_VOICES`). `screencaster-mcp` calls `wire.TTS` at startup; the CLI calls it when a render starts, so `--help` and `--version` work without a provider. Either way it fails with a clear message, before any render work, when the name is unknown or the Piper binary is missing. An unset name means `piper`, whose binary and voices default to the install dir `screencaster setup` fills (`<dir>/piper`, `<dir>/piper/voices`); the two Piper variables override. The image sets all three, so no image path lives in Go code and a native user sets none.
 - Voice discovery belongs to the provider. The Piper adapter scans the image's voice folder and `/work/voices` on every call; the language is the voice name up to the first `_` (FR-018).
-- `--add-host=host.docker.internal:host-gateway` lets a `baseUrl` reach the host app on Linux (Decision 27). The container runs as root, so output files are root-owned.
+- **No `--shm-size`, no `--add-host` (Decision 79).** Playwright starts Chromium with `--disable-dev-shm-usage`, so the 64 MB default `/dev/shm` is enough. A host app on Linux is reached by the Docker bridge IP (`172.17.0.1` by default) written into the demo's `goto` URLs; Docker Desktop uses `host.docker.internal`. The app must listen on `0.0.0.0`. The container runs as root, so output files are root-owned.
 - **Stdio hygiene.** MCP uses stdout for protocol frames, so all logging goes to stderr and subprocess output (Piper, ffmpeg, the Playwright driver) is captured, never inherited. A stray byte on stdout corrupts the session.
 - **Native install (Decision 77).** `sudo ./screencaster setup` (use case `app/setup`) checks and installs five pieces under the install dir, `/opt/screencaster` or `SCREENCASTER_HOME`: Piper (`piper/`), the two built-in voices (`piper/voices/`), the Playwright driver (`playwright-driver/`), Chromium (`ms-playwright/`) and ffmpeg (system, apt). Piper and the voices are sha256-pinned: the values are not in Go but in `app/setup/pins.env` (embedded), which repeats the ARGs of `providers/piper/Dockerfile`; `pins_test.go` fails when the two differ. `LoadPins` merges three layers, each winning over the one before: the embedded `pins.env`, any `setup --pins-file` (same format, repeatable), and the environment (`SCREENCASTER_PIPER_VERSION`, `_PIPER_SHA256`, `_PIPER_URL_BASE`, `_VOICES_REV`, `_VOICES_URL_BASE`, and `SCREENCASTER_VOICE_FILES` with `name=path=sha256;...`). A layer that sets a Piper version must set its sha256; an unknown key is an error. An update needs no rebuild. The driver and Chromium come from one `playwright.Install` call (`adapters/browser`); ffmpeg from `apt-get` when apt exists, else an error naming the command. `setup.json` in the install dir records what was installed (Piper's pin; the release version for the driver and Chromium), so a rerun verifies each piece, skips the good ones and repairs the rest; a new release reinstalls the driver and Chromium. `setup --check` changes nothing and needs no root. `wire` points the render at the same dir: `wire.TTS` defaults to Piper there, and `wire.launcher` sets the driver dir and `PLAYWRIGHT_BROWSERS_PATH` unless `PLAYWRIGHT_DRIVER_PATH` / `PLAYWRIGHT_BROWSERS_PATH` are set (the images set them). `setup` refuses non-amd64 and, unless `--check`, non-root before any work. System libraries for Chromium come from `--with-deps` on apt systems only.
-- **Release (Decision 76, amended by 77).** The `release` workflow is started by hand with a version `X.Y.Z`. It cross-compiles `screencaster` and `screencaster-mcp` for linux amd64 and arm64, adds `screencaster-docker` (the template `scripts/screencaster-docker.sh` with the version filled in: `docker run` of `ghcr.io/makuchpatryk/screencaster:X.Y.Z` with `--init`, `--shm-size=1g`, the host mapping and `$PWD` mounted at `/work`) to each of the two tarballs and as a Release asset, runs `make image VERSION=X.Y.Z` and `make image-check`, pushes `ghcr.io/makuchpatryk/screencaster:X.Y.Z` and `:latest`, and creates the GitHub Release last, so a failed build leaves no half-published release. The version reaches both mains through one `-X main.version` flag (`var version = "dev"` in each); the `VERSION` build arg and `make` variable carry it into the `build` stage. The image is amd64 only (Piper is pinned to `piper_linux_x86_64` in `providers/piper/Dockerfile`); the native binaries run `screencaster setup` once (above) and need network, and Debian/Ubuntu for the automatic ffmpeg and Chromium libraries (README, Install).
+- **Release (Decision 76, amended by 77).** The `release` workflow is started by hand with a version `X.Y.Z`. It cross-compiles `screencaster` and `screencaster-mcp` for linux amd64 and arm64, adds `screencaster-docker` (the template `scripts/screencaster-docker.sh` with the version filled in: `docker run` of `ghcr.io/makuchpatryk/screencaster:X.Y.Z` with `--init` and `$PWD` mounted at `/work`) to each of the two tarballs and as a Release asset, runs `make image VERSION=X.Y.Z` and `make image-check`, pushes `ghcr.io/makuchpatryk/screencaster:X.Y.Z` and `:latest`, and creates the GitHub Release last, so a failed build leaves no half-published release. The version reaches both mains through one `-X main.version` flag (`var version = "dev"` in each); the `VERSION` build arg and `make` variable carry it into the `build` stage. The image is amd64 only (Piper is pinned to `piper_linux_x86_64` in `providers/piper/Dockerfile`); the native binaries run `screencaster setup` once (above) and need network, and Debian/Ubuntu for the automatic ffmpeg and Chromium libraries (README, Install).
 - Go tooling runs in the dev image (Decision 52); `make image-check` runs the provider's own `image-check.sh` (for Piper: the built-in voices are in the image).
 
 ## 13. Testing strategy
@@ -320,7 +320,7 @@ CI runs lint, vet and `go test -race` (one `check` job), an image build (`image`
 Local single-user tool (PRD §14), so the model is minimal:
 
 - An inline `storageState` holds live session cookies: keep such a demo out of git.
-- No outbound network from a render except Chromium to `baseUrl` and absolute `goto` URLs (NFR-003). `screencaster setup` is the one command that downloads, and only from pinned or fixed sources: `github.com` (Piper release, sha256-checked), `huggingface.co` (voices at a fixed revision, sha256-checked), `nodejs.org` and `registry.npmjs.org` (the Playwright driver, fetched by playwright-go) and the Playwright CDN (Chromium), plus the distro's apt mirrors for ffmpeg. It runs as root and writes the install dir and, through apt, the system.
+- No outbound network from a render except Chromium to the demo's absolute `goto` URLs (NFR-003). `screencaster setup` is the one command that downloads, and only from pinned or fixed sources: `github.com` (Piper release, sha256-checked), `huggingface.co` (voices at a fixed revision, sha256-checked), `nodejs.org` and `registry.npmjs.org` (the Playwright driver, fetched by playwright-go) and the Playwright CDN (Chromium), plus the distro's apt mirrors for ffmpeg. It runs as root and writes the install dir and, through apt, the system.
 - Scripts are data. YAML parses into typed structs, the schema rejects unknown fields, and selectors go only to Playwright. Paths in scripts and tool input are not trusted: they are checked against the working directory (Decision 58).
 
 ## 15. Extension points (post-MVP)
@@ -331,7 +331,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61, 65–71, 76 and 77 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61, 65–71 and 76–79 are only here.
 
 | # | Decision | Why |
 |---|----------|-----|
@@ -349,8 +349,8 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 
 | 55 | Schema next to the package that embeds it (now `internal/domain/script/script.schema.json`) | `go:embed` cannot reach a parent directory. |
 | 56 | `make e2e-runtime`: test binary built in the dev image, run inside the runtime image | Covers the image's binary, Chromium, Piper and ffmpeg with no network or docker-in-docker. |
 | 57 | Job timestamps use a fixed-width UTC layout | `RFC3339Nano` trims zeros and breaks text ordering. |
-| 58 | Each demo is one self-contained YAML (`baseUrl` required; `storageState`, `outputDir` optional); no project config file. Supersedes PRD decision 15 | No hidden project state. Script and tool-input paths are LLM-written, so `renderer` confines them to the working directory. |
-| 59 | `explore_page` takes an absolute `url` and an inline `storageState`; the url is the `BaseURL` | Nothing to read from disk; executor and explorer stay unchanged. |
+| 58 | Each demo is one self-contained YAML (`storageState`, `outputDir` optional; `baseUrl` was required, removed by 78); no project config file. Supersedes PRD decision 15 | No hidden project state. Script and tool-input paths are LLM-written, so `renderer` confines them to the working directory. |
+| 59 | `explore_page` takes an absolute `url` and an inline `storageState`; the url was also the `BaseURL`, amended by 78 (no base) | Nothing to read from disk; executor and explorer stay unchanged. |
 | 60 | No project-level voice defaults: script, then built-in | Follows from 58. |
 | 61 | `storageState` is an inline object in Playwright's shape, not a file path | One self-contained file; no existence or path checks. |
 | 62 | Demo paths resolve against the demo's folder and must stay inside the working directory. Supersedes the rejection in 58 | A demo, its videos and its pictures move together. |
@@ -369,6 +369,8 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 
 | 75 | `domain/shooter` runs a screenshots run and intercepts `screenshot` steps; the executor is unchanged; the renderer reaches it through a `Shooter` port wired in `app/wire`. `take_screenshots` reuses the queue, worker, lock and `get_render_status`; no job-kind column | `Page.Screenshot` plus an executor case; the capture loop in `adapters/browser`; a separate queue | The executor stays file-agnostic and its fakes untouched; step semantics stay in one place; the renderer branches on the script type, so the worker needs no change. |
 | 76 | Releases are cut by hand: the `release` workflow takes a version, builds linux amd64 and arm64 tarballs (`screencaster`, `screencaster-mcp`; amended by 77: no `playwright`, plus `screencaster-docker`) with plain `go build`, pushes an amd64-only image to GHCR and creates the GitHub Release last. The version is injected once by `-ldflags -X main.version`; native binaries install their tools with `setup` (77) | GoReleaser; tag-push or per-commit triggers; a multi-arch image; extracting binaries from the Docker `build` stage; a `version` subcommand | User choice for the manual trigger, the amd64 image, `--version` and the shipped `playwright` CLI. Two binaries and one OS do not need a release tool; Piper is pinned to x86_64, so an arm64 image would be untested by `make e2e-runtime`; the binaries cannot fetch their driver and Chromium, and a user without Go cannot build the CLI. |
 | 77 | One `screencaster setup` command (use case `app/setup`, ports for download, browser install, apt, files and host) installs Piper, the voices, the Playwright driver, Chromium and ffmpeg into a compiled-in install dir `/opt/screencaster` (`SCREENCASTER_HOME` overrides); `--check` reports without changing; pins live in an embedded `pins.env` (parity test with the Dockerfile ARGs), overridable by `--pins-file` files and `SCREENCASTER_*` variables so an update needs no rebuild; `SCREENCASTER_TTS` unset means piper at the install dir; Playwright is installed through playwright-go's `Install`, so no CLI ships; the Docker path is a separate script `screencaster-docker` in the tarball; the Dockerfiles keep their own install layers | A shell `install.sh` with a `pins.env`; one adapter package called from `cmd` without a use case; install into `~/.cache` with `SUDO_USER`; shipping the `playwright` CLI; a `docker-install` subcommand | The README's three manual steps were the main barrier to native use. A use case with ports tests every branch with fakes and keeps `wire` the one composition root; a fixed dir readable by all users means any user can render after one root run; the library already covers the CLI's options, so one binary less ships (cost: Node.js and npm downloads at setup); a separate script lets a Docker user take one file. Costs: pins in two places (guarded by `pins_test.go`), and `render` is still offline while one new command uses the network. |
+| 78 | `baseUrl` is removed; every `goto` is an absolute http(s) URL, checked by `domain/script` (`AbsoluteHTTP`) and passed through the executor unchanged; a relative `goto` fails at `/steps/<i>/goto`; a script that still has `baseUrl` gets one hint at `/baseUrl` and no other error. Amends 27 (PRD), 58 and 59 | A deprecation warning; the hint plus the schema errors (the decision 70 pattern); resolving against the explored page in `explore_page` | User choice: a hard break. One URL rule in Go, no resolution code in the executor, no base plumbing through shooter, recorder, explorer and browser. Cost: a demo hardcodes the app's address. |
+| 79 | The Docker wrapper (`screencaster-docker`), `compose.yaml` and `make` targets set neither `--shm-size` nor `--add-host`. Playwright's default Chromium switches include `--disable-dev-shm-usage`; a Linux host app is reached by the bridge IP in the demo, Docker Desktop by `host.docker.internal`. Amends 76's wrapper flags | Resolving `host.docker.internal` to the gateway in Go (`/proc/net/route`, `--host-resolver-rules`); keeping `--add-host` for host-app demos | User choice: the shortest command that renders; no DNS code, no native-run question. A Playwright upgrade that drops the switch brings back the shared-memory crash: `make e2e` runs without the flag and catches it. |
 
 ## 17. Open items for spikes
 

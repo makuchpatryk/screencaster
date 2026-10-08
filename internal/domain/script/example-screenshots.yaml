@@ -1,6 +1,5 @@
 name: projects-screens
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 storageState:                  # optional; omit for a public site
   cookies:
     - name: session
@@ -8,7 +7,7 @@ storageState:                  # optional; omit for a public site
       domain: host.docker.internal
       path: /
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
   - screenshot: true           # the viewport, 01.png
   - screenshot: { fullPage: true }
   - screenshot: { selector: "#project-list" }

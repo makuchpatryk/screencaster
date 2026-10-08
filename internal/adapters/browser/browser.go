@@ -45,7 +45,6 @@ type Launcher struct{ DriverDir string }
 
 // Options configure one session. Zero values mean off.
 type Options struct {
-	BaseURL      string
 	StorageState *script.StorageState // nil: fresh, logged-out session
 	VideoDir     string               // record a video of the page into this directory
 	StartImage   string               // PNG or JPEG the recorded page shows until the first goto paints
@@ -159,9 +158,6 @@ func (s *Session) open(o Options) error {
 
 	size := &playwright.Size{Width: Width, Height: Height}
 	opts := playwright.BrowserNewContextOptions{Viewport: size}
-	if o.BaseURL != "" {
-		opts.BaseURL = playwright.String(o.BaseURL)
-	}
 	if o.StorageState != nil {
 		if opts.StorageState, err = playwrightState(o.StorageState); err != nil {
 			return err

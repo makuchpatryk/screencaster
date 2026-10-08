@@ -1,8 +1,7 @@
 name: demo
-baseUrl: http://host.docker.internal:3000
 storageState:
   cookies:
     - name: session
       value: abc123
 steps:
-  - goto: /
+  - goto: http://host.docker.internal:3000/

@@ -1,5 +1,4 @@
 name: create-project
-baseUrl: http://host.docker.internal:3000
 storageState:                  # optional; omit for a public site
   cookies:
     - name: session
@@ -12,7 +11,7 @@ meta:
   description: Create a project from the projects page.
   audience: release-notes
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
     narration:
       en: This is the projects page.
       pl: To jest strona projektów.

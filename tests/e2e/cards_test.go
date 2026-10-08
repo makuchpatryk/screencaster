@@ -19,12 +19,11 @@ import (
 // the next the extra top-level fields (intro, outro, outputDir). The tags match
 // assertVideo's.
 const cardsScript = `name: e2e-demo
-baseUrl: %s
 meta:
   title: E2E demo
   description: Every action plus the drift marker.
-%ssteps:
-  - goto: /marker.html
+%[2]ssteps:
+  - goto: %[1]s/marker.html
   - wait: 500
 `
 

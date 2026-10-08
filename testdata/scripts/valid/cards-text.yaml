@@ -1,10 +1,9 @@
 # Built-in cards with their own text; durationMs is optional.
 name: cards-text
-baseUrl: https://example.com/app
 intro:
   title: Projects tour
   subtitle: Create and share a project in one minute.
 outro:
   title: See you next time
 steps:
-  - goto: /
+  - goto: https://example.com/app/

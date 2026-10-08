@@ -18,12 +18,11 @@ import (
 
 const shotsScript = `name: shots
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 storageState:
   cookies:
     - {name: session, value: abc, domain: host.docker.internal, path: /}
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
   - screenshot: true
   - click: "#new"
   - screenshot: { selector: "#form" }
@@ -180,9 +179,9 @@ func TestRender_screenshotsRequestCarriesTheScript(t *testing.T) {
 	if !sh.dirExisted {
 		t.Error("the temp dir did not exist when Shoot was called")
 	}
-	if in.BaseURL != "http://host.docker.internal:3000" || len(in.Steps) != 4 ||
+	if len(in.Steps) != 4 ||
 		in.StorageState == nil || in.StorageState.Cookies[0].Name != "session" {
-		t.Errorf("request = %+v, want the script's base URL, 4 steps and the storage state", in)
+		t.Errorf("request = %+v, want 4 steps and the storage state", in)
 	}
 }
 
@@ -198,7 +197,7 @@ func TestRender_screenshotsProgressHasNoLanguage(t *testing.T) { // CLI prints `
 	if _, err := Render(context.Background(), shotsDeps(f, sh, files), req); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"[] 1/4 goto /projects", "[] 2/4 screenshot ", "[] 3/4 click #new", "[] 4/4 screenshot #form"}
+	want := []string{"[] 1/4 goto http://host.docker.internal:3000/projects", "[] 2/4 screenshot ", "[] 3/4 click #new", "[] 4/4 screenshot #form"}
 	if !reflect.DeepEqual(lines, want) {
 		t.Errorf("progress = %q, want %q", lines, want)
 	}

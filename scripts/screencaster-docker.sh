@@ -9,11 +9,10 @@
 # (decision 77).
 set -eu
 
-# --init forwards SIGTERM; --shm-size because Chromium needs more than Docker's
-# 64 MB default; --add-host lets a baseUrl of http://host.docker.internal:3000
-# reach an app on this machine (Linux).
-exec docker run --rm --init --shm-size=1g \
-  --add-host=host.docker.internal:host-gateway \
+# --init forwards SIGTERM. Nothing else is needed: Playwright starts Chromium
+# without /dev/shm, and an app on this machine is reached by its bridge IP,
+# written into the demo's goto URLs (decision 79).
+exec docker run --rm --init \
   -v "$PWD:/work" -w /work \
   --entrypoint screencaster \
   ghcr.io/makuchpatryk/screencaster:@VERSION@ "$@"

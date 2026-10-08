@@ -1,7 +1,6 @@
 name: demo
-baseUrl: http://host.docker.internal:3000
 outro:
   image: logo.png
   subtitle: Bye
 steps:
-  - goto: /
+  - goto: http://host.docker.internal:3000/

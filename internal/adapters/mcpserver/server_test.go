@@ -28,9 +28,8 @@ import (
 )
 
 const validScript = `name: demo-one
-baseUrl: http://host.docker.internal:3000
 steps:
-  - goto: /projects
+  - goto: http://host.docker.internal:3000/projects
     narration:
       en: Hello.
 `
@@ -191,7 +190,7 @@ func TestServer_listsToolsAndPrompt(t *testing.T) {
 	for _, want := range []string{
 		strings.TrimSpace(string(script.SchemaJSON()))[:20],
 		"name: create-project",
-		"relative to the script's `baseUrl`",
+		"Every goto is an absolute http(s) URL",
 		"narration text for every selected language",
 		"No login steps",
 	} {
@@ -508,13 +507,19 @@ func TestExplorePage_storageState(t *testing.T) {
 	}
 }
 
-// The url is also the base, so a relative goto in actions resolves against
-// the page being explored (decision 59).
-func TestExplorePage_urlIsTheBase(t *testing.T) {
+// There is no base URL (decision 78): a relative goto in actions is a tool
+// error, and no browser is launched for it.
+func TestExplorePage_relativeGotoInActionsIsRejected(t *testing.T) {
 	e := newEnv(t)
-	decode[exploreOut](t, e.call(t, "explore_page", map[string]any{"url": "http://app:3000/projects"}))
-	if len(e.launched) != 1 || e.launched[0].BaseURL != "http://app:3000/projects" {
-		t.Errorf("launched = %+v, want BaseURL == url", e.launched)
+	res := e.call(t, "explore_page", map[string]any{
+		"url":     "http://app:3000/projects",
+		"actions": []map[string]any{{"goto": "/other"}},
+	})
+	if want := "/steps/0/goto: goto must be an absolute http or https URL: /other"; !res.IsError || !strings.Contains(text(res), want) {
+		t.Errorf("got %v %q, want an error containing %q", res.IsError, text(res), want)
+	}
+	if len(e.launched) != 0 {
+		t.Errorf("a browser was launched: %+v", e.launched)
 	}
 }
 

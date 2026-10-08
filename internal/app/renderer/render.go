@@ -38,8 +38,7 @@ type RecordRequest struct {
 	Steps        []script.Step
 	Clips        map[int]time.Duration
 	Lang         string
-	Dir          string // video output directory
-	BaseURL      string
+	Dir          string               // video output directory
 	StorageState *script.StorageState // nil: logged-out session
 	StartImage   string
 	OnStep       func(i int)
@@ -113,8 +112,7 @@ type Cards interface {
 // right before each step runs.
 type ShootRequest struct {
 	Steps        []script.Step
-	Dir          string // PNGs are written here
-	BaseURL      string
+	Dir          string               // PNGs are written here
 	StorageState *script.StorageState // nil: logged-out session
 	OnStep       func(i int)
 }
@@ -241,7 +239,7 @@ func renderShots(ctx context.Context, d Deps, plan Plan, runDir string, start ti
 	}
 
 	steps := plan.Script.Steps
-	in := ShootRequest{Steps: steps, Dir: shotDir, BaseURL: plan.Script.BaseURL, StorageState: plan.Script.StorageState}
+	in := ShootRequest{Steps: steps, Dir: shotDir, StorageState: plan.Script.StorageState}
 	if rep.progress != nil {
 		in.OnStep = func(i int) { rep.progress("", i+1, len(steps), steps[i].Action.Name(), steps[i].Action.Target()) }
 	}
@@ -308,7 +306,6 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, re
 		Clips:        durations,
 		Lang:         lang,
 		Dir:          videoDir,
-		BaseURL:      plan.Script.BaseURL,
 		StorageState: plan.Script.StorageState,
 	}
 	if intro != nil {

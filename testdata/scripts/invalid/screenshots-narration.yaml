@@ -1,8 +1,7 @@
 name: demo
 type: screenshots
-baseUrl: http://host.docker.internal:3000
 steps:
-  - goto: /
+  - goto: http://host.docker.internal:3000/
   - screenshot: true
     narration:
       en: Look at this.

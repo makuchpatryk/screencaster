@@ -7,10 +7,5 @@ services:
     entrypoint: ["screencaster"]
     # Forwards SIGTERM so a stopped render cleans up.
     init: true
-    # Chromium needs more than Docker's default 64 MB of /dev/shm.
-    shm_size: 1gb
-    # Lets baseUrl: http://host.docker.internal:3000 reach an app on the host (Linux).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - .:/work
