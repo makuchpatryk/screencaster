@@ -73,18 +73,13 @@ steps:
 
 var outputName = regexp.MustCompile(`^e2e-demo\.(en|pl)\.(\d{8}T\d{6}Z)\.mp4$`)
 
-// cliBinary builds the screencaster binary, or returns the one named by
-// SCREENCASTER_BIN: `make e2e-runtime` points it at the runtime image's binary.
+// cliBinary is the screencaster binary TestMain built, or the one SCREENCASTER_BIN
+// names: `make e2e-runtime` points it at the runtime image's binary.
 func cliBinary(t *testing.T) string {
 	t.Helper()
-	if bin := os.Getenv("SCREENCASTER_BIN"); bin != "" {
-		return bin
-	}
-	bin := filepath.Join(t.TempDir(), "screencaster")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = "../../cmd/screencaster"
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build cli: %v\n%s", err, out)
+	bin := os.Getenv("SCREENCASTER_BIN")
+	if bin == "" {
+		t.Fatal("SCREENCASTER_BIN not set")
 	}
 	return bin
 }
@@ -142,10 +137,12 @@ func runCLI(t *testing.T, bin, dir string, args ...string) cliResult {
 	return res
 }
 
-// FR-011, FR-009, FR-010, NFR-001, NFR-002 and the FR-007 drift bound, end to
-// end through the CLI binary with real Chromium, Piper and ffmpeg. One
-// language, so the drift check is a ~45 s loop; the two-language checks
-// (FR-004 AC1, FR-010, NFR-001) are in TestRender_cli_enPl.
+// FR-011, FR-009, FR-010, FR-004 AC1, NFR-001, NFR-002 and the FR-007 drift
+// bound, end to end through the CLI binary with real Chromium, Piper and ffmpeg.
+// The EN render is the drift check (~45 s). The EN+PL render then runs in the
+// same project, so the FR-010 no-overwrite check reuses that EN output instead
+// of a second EN render. The tests run one at a time so NFR-001 is timed on an
+// idle machine.
 func TestRender_cli(t *testing.T) {
 	bin := cliBinary(t)
 	dir := project(t, fixtureApp(t))
@@ -181,23 +178,7 @@ func TestRender_cli(t *testing.T) {
 
 	assertDrift(t, enPaths[0], defaultCard) // the script has the default 3 s intro
 
-	if left, _ := filepath.Glob(filepath.Join(dir, ".screencaster", "tmp", "*")); len(left) > 0 {
-		t.Errorf("temp dirs left behind: %v", left)
-	}
-}
-
-// TestRender_cli_enPl: EN + PL (FR-004 AC1), timed for NFR-001, after an EN
-// render in the same project for the FR-010 no-overwrite check. Takes ~2 min.
-func TestRender_cli_enPl(t *testing.T) {
-	bin := cliBinary(t)
-	dir := project(t, fixtureApp(t))
-
-	en := runCLI(t, bin, dir, "render", "demos/e2e-demo.yaml")
-	if en.code != 0 {
-		t.Fatalf("default render exit %d\n%s", en.code, en.stderr)
-	}
-	enPaths := outputPaths(t, en.stdout, "en")
-
+	// FR-004 AC1, FR-010, NFR-001: EN + PL, timed, after the EN render above.
 	both := runCLI(t, bin, dir, "render", "demos/e2e-demo.yaml", "--lang", "en,pl")
 	if both.code != 0 {
 		t.Fatalf("en,pl render exit %d\n%s", both.code, both.stderr)
@@ -225,11 +206,16 @@ func TestRender_cli_enPl(t *testing.T) {
 	if both.elapsed > 2*total {
 		t.Errorf("NFR-001: render took %v, more than 2x the %v of output", both.elapsed, total)
 	}
+
+	if left, _ := filepath.Glob(filepath.Join(dir, ".screencaster", "tmp", "*")); len(left) > 0 {
+		t.Errorf("temp dirs left behind: %v", left)
+	}
 }
 
 // FR-008 AC through the CLI: a missing selector fails with exit 1 and the
 // output dir stays as it was.
 func TestRender_cliFailureLeavesOutputUnchanged(t *testing.T) {
+	t.Parallel()
 	bin := cliBinary(t)
 	dir := project(t, fixtureApp(t))
 
@@ -268,6 +254,7 @@ steps:
 // Decision 58: one file and one command. The work dir holds only the demo, so
 // there is no screencaster.yaml and no storageState to read.
 func TestRender_publicSiteNoStorageState(t *testing.T) {
+	t.Parallel()
 	bin := cliBinary(t)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "demos"), 0o755); err != nil {
@@ -385,7 +372,7 @@ func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
 	}
 	lead := leadSilence(t, clip)
 
-	flash := flashOnset(t, mp4, intro) // narration and picture are both shifted by the intro
+	flash := lastFlashOnset(t, mp4, intro) // narration and picture are both shifted by the intro
 	// The clip before the marker ends seconds earlier, so the first sound
 	// after (flash - 1 s) is the marker narration.
 	onset := firstSoundAfter(t, mp4, flash-time.Second)
@@ -397,12 +384,15 @@ func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
 	}
 }
 
-// maxDrift is the PRD's ±100 ms (FR-007). Over 20 local renders with the sync
-// marker (decision 69) the drift was 25-33 ms in 13, 59-66 ms in 6 and 132 ms
-// in one. It sits on the 33 ms frame grid of the 30 fps output: the flash frame
-// is the first frame after the click paints, so most of the ~30 ms "bias" is the
-// measurement, not a placement error, and a constant would only tune the test.
-// The 132 ms run means a ~1 in 20 flake at this bound.
+// maxDrift is the PRD's ±100 ms (FR-007). The flash frame is the first frame
+// after the key press paints, on the 33 ms grid of the 30 fps output.
+//
+// History: until the check was fixed to take the last flash (lastFlashOnset), it
+// measured the paint of index.html against the first narration clip (25-33 ms
+// or 59-66 ms, rarely 132-330 ms when the first page load was slow), not the
+// marker. On the marker flash, 14 renders gave 10-182 ms (median about 90 ms),
+// 5 of them above 100 ms. The press itself took 25-68 ms of that: narration
+// starts at the step offset, the flash after the press returns and paints.
 const maxDrift = 100 * time.Millisecond
 
 var (

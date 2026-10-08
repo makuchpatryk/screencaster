@@ -12,6 +12,14 @@ import (
 	"screencaster/internal/domain/script"
 )
 
+// FR-008: the action bound is 30 s. The e2e tests shorten ActionTimeout, so the
+// default is pinned here.
+func TestActionTimeout_is30s(t *testing.T) {
+	if ActionTimeout != 30*time.Second {
+		t.Errorf("ActionTimeout = %v, want 30s", ActionTimeout)
+	}
+}
+
 // fakePage records calls as strings and fails the call named in failOn.
 type fakePage struct {
 	calls  []string

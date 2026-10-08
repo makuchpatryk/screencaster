@@ -52,6 +52,7 @@ func readPNG(t *testing.T, path string) image.Image {
 // Decision 63: the built-in card is a 1920x1080 picture with text on the
 // dark background, one Chromium for both cards.
 func TestScreenshot_cardIsFullFrameAndNotBlank(t *testing.T) {
+	t.Parallel()
 	paths := shoot(t, card.Text{Title: "Projects tour", Subtitle: "A short demo"}, card.Text{Title: card.Outro("en")})
 
 	for _, p := range paths {
@@ -79,6 +80,7 @@ func TestScreenshot_cardIsFullFrameAndNotBlank(t *testing.T) {
 // Spike S5: the image's fonts have the Polish letters. A missing glyph draws
 // the same box for every letter, so two different strings would look alike.
 func TestScreenshot_polishGlyphsAreDistinct(t *testing.T) {
+	t.Parallel()
 	paths := shoot(t, card.Text{Title: "ĄĘŁŻ"}, card.Text{Title: "ŹŃÓĆ"}, card.Text{Title: "ąęłżźńóć"}, card.Text{Title: "źńóćąęłż"})
 
 	same := func(a, b string) bool {

@@ -144,6 +144,7 @@ func listNames(t *testing.T, dir string) []string {
 // removal, foreign files kept), and a failure that leaves the folder alone
 // (decisions 72-75).
 func TestShots_cli(t *testing.T) {
+	t.Parallel()
 	bin := cliBinary(t)
 	base := fixtureApp(t)
 	dir := t.TempDir()

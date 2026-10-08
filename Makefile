@@ -55,9 +55,12 @@ vet:
 lint:
 	$(DEV_RUN) golangci-lint run ./...
 
-# Slow: it drives real Chromium.
+# Slow: it drives real Chromium. CI passes E2E_RACE=-race; local runs skip the race
+# detector (the browser, TTS and ffmpeg dominate the time).
+E2E_RACE ?=
+
 e2e:
-	$(E2E_RUN) go test -tags e2e -race -count=1 -v ./tests/e2e/...
+	$(E2E_RUN) go test -tags e2e $(E2E_RACE) -count=1 -v ./tests/e2e/...
 
 # The CLI and card e2e tests against the runtime image (PRD M4 DoD): the test binary is
 # compiled in the dev image, then runs in the runtime image next to the image's

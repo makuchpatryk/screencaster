@@ -13,9 +13,11 @@ import (
 	"screencaster/internal/domain/script"
 )
 
+// ActionTimeout bounds every page action; there is no retry (BR-004, FR-008).
+// A variable only so the e2e tests can shorten it; production never sets it.
+var ActionTimeout = 30 * time.Second
+
 const (
-	// ActionTimeout bounds every page action; there is no retry (BR-004, FR-008).
-	ActionTimeout = 30 * time.Second
 	// GlideSteps is the number of interpolated mouse moves before an
 	// interaction (FR-006).
 	GlideSteps = 25

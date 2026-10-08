@@ -40,6 +40,7 @@ func selectorFor(t *testing.T, snapshot, role, name string) string {
 // FR-017 AC1 and AC3: the snapshot carries role=button[name="New project"],
 // and the selectors it returns drive a real render without edits.
 func TestExplore_selectorsWorkInARender(t *testing.T) {
+	t.Parallel()
 	base := fixtureApp(t)
 	dir := project(t, base)
 
@@ -81,6 +82,7 @@ func TestExplore_selectorsWorkInARender(t *testing.T) {
 // clicks exactly the element on its line. role= compares whole names, so only
 // the repeated one needs nth.
 func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
+	t.Parallel()
 	base := fixtureApp(t)
 	ex := newExplorer()
 	in := explorer.Input{
@@ -112,6 +114,7 @@ func TestExplore_selectorsPickTheirOwnElement(t *testing.T) {
 
 // FR-017 edge case: a failing action names its step and still returns the page.
 func TestExplore_failedActionKeepsSnapshot(t *testing.T) {
+	shortActionTimeout(t) // the missing selector waits out the action timeout
 	base := fixtureApp(t)
 	out, err := newExplorer().Explore(context.Background(), explorer.Input{
 		StorageState: fixtureState,

@@ -42,4 +42,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make dev-image PROVIDER=piper
-      - run: make e2e PROVIDER=piper
+      - run: make e2e PROVIDER=piper E2E_RACE=-race

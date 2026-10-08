@@ -19,6 +19,7 @@ import (
 // A silent recording of the fixture app (FR-004, FR-005, FR-006): the
 // storageState cookie shows #logged-in, a form is filled and submitted.
 func TestRecord_fixtureApp(t *testing.T) {
+	t.Parallel()
 	base := fixtureApp(t)
 	steps := []script.Step{
 		{Action: script.Goto{URL: base + "/index.html"}},
@@ -50,7 +51,8 @@ func TestRecord_fixtureApp(t *testing.T) {
 // The recording opens dark: a new page is white until the first goto paints,
 // which showed as a white flash right after the start card. No step navigates
 // here, so every frame is the start page: the sync marker (magenta, YAVG about
-// 80-105), then the card colour. The assembler cuts the marker off.
+// 80-105), then the card colour. The assembler cuts the marker off. Not
+// parallel: under CPU load the first paint is late and the white page shows.
 func TestRecord_startsDark(t *testing.T) {
 	base := fixtureApp(t)
 	steps := []script.Step{{Action: script.Pause{D: time.Second}}}
@@ -66,6 +68,7 @@ func TestRecord_startsDark(t *testing.T) {
 
 // FR-004 AC1: each language is its own recording from a fresh context.
 func TestRecord_twoRecordingsAreIndependent(t *testing.T) {
+	t.Parallel()
 	base := fixtureApp(t)
 	rec := newRecorder(t, nil)
 	steps := []script.Step{{Action: script.Goto{URL: base + "/index.html"}}, {Action: script.WaitFor{Selector: "#logged-in"}}}
@@ -84,10 +87,12 @@ func TestRecord_twoRecordingsAreIndependent(t *testing.T) {
 }
 
 // FR-008 AC: a missing selector at step 4 aborts with step 4 and lang en
-// within 31 s. The clock starts once Chromium is up and leaves out the sync
-// marker hold: the 30 s bound is on the action, not on the browser launch or
-// the marker (decision 69).
+// within the action timeout (30 s by default, pinned in executor_test; shortened
+// here). The clock starts once Chromium is up and leaves out the sync marker
+// hold: the bound is on the action, not on the browser launch or the marker
+// (decision 69). Not parallel: it shortens executor.ActionTimeout.
 func TestRecord_missingSelectorAbortsWithinTimeout(t *testing.T) {
+	limit := shortActionTimeout(t)
 	base := fixtureApp(t)
 	var launched time.Time
 	steps := []script.Step{
@@ -108,14 +113,15 @@ func TestRecord_missingSelectorAbortsWithinTimeout(t *testing.T) {
 	if f.Step == nil || *f.Step != 4 || f.Lang != "en" || f.Action != "click" || f.Target != "#does-not-exist" {
 		t.Errorf("failure = %+v, want step 4, lang en, click #does-not-exist", f)
 	}
-	if elapsed > 31*time.Second {
-		t.Errorf("aborted after %v, want <= 31s", elapsed)
+	if elapsed > limit+time.Second {
+		t.Errorf("aborted after %v, want <= %v", elapsed, limit+time.Second)
 	}
 }
 
 // Spike S2 (ARCHITECTURE §17): a selector that matches several elements must
 // fail at once, naming the count, never click the first match.
 func TestBrowser_ambiguousSelectorFailsFast(t *testing.T) {
+	t.Parallel()
 	base := fixtureApp(t)
 	sess, err := browser.Launcher{}.Launch(context.Background(), browser.Options{})
 	if err != nil {

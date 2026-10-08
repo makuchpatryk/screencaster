@@ -68,6 +68,7 @@ func writeDemo(t *testing.T, dir, name, body string) {
 // image replaces the card, and false removes it. Decision 62: the picture and
 // the output folder are relative to the demo file.
 func TestRender_cliCards(t *testing.T) {
+	t.Parallel()
 	bin := cliBinary(t)
 	base := fixtureApp(t)
 	dir := t.TempDir()

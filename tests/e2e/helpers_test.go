@@ -5,9 +5,11 @@ package e2e
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -16,9 +18,51 @@ import (
 	"time"
 
 	"screencaster/internal/adapters/browser"
+	"screencaster/internal/domain/executor"
 	"screencaster/internal/domain/recorder"
 	"screencaster/internal/domain/script"
 )
+
+// TestMain builds the CLI once for every CLI test, unless SCREENCASTER_BIN names
+// a binary already (the e2e-runtime target).
+func TestMain(m *testing.M) {
+	if os.Getenv("SCREENCASTER_BIN") != "" {
+		os.Exit(m.Run())
+	}
+	dir, err := os.MkdirTemp("", "screencaster-e2e")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	bin := filepath.Join(dir, "screencaster")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = "../../cmd/screencaster"
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "go build cli: %v\n%s", err, out)
+		_ = os.RemoveAll(dir)
+		os.Exit(1)
+	}
+	if err := os.Setenv("SCREENCASTER_BIN", bin); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		_ = os.RemoveAll(dir)
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// shortActionTimeout lowers executor.ActionTimeout for one test, so an action
+// that times out fails in seconds, not 30 s. The variable is process-wide: the
+// test must not be parallel.
+func shortActionTimeout(t *testing.T) time.Duration {
+	t.Helper()
+	const d = 3 * time.Second
+	prev := executor.ActionTimeout
+	executor.ActionTimeout = d
+	t.Cleanup(func() { executor.ActionTimeout = prev })
+	return d
+}
 
 // fixtureApp serves testdata/fixture-app and returns its base URL
 // (http://127.0.0.1:<port>, the host the storageState cookie is set for).
@@ -68,11 +112,14 @@ func newRecorder(t *testing.T, launched *time.Time) recorder.Recorder {
 // (YAVG is 16 for black and 235 for white in limited-range video).
 const brightnessThreshold = 128
 
-// flashOnset returns the presentation time of the first bright frame that
-// follows a dark one, looking only at frames from `from` on. The dark
-// requirement skips any white frames the recording starts with; `from` skips
-// an intro card, which is dark too.
-func flashOnset(t *testing.T, video string, from time.Duration) time.Duration {
+// lastFlashOnset returns the presentation time of the last bright frame that
+// follows a dark one, looking only at frames from `from` on. The fixture's
+// pages before marker.html are white (index.html paints bright right after the
+// intro), so the first transition is a page paint, not the drift probe: the
+// marker step is the last in the script, which makes its flash the last
+// transition. The dark requirement skips any white frames the recording starts
+// with; `from` skips an intro card, which is dark too.
+func lastFlashOnset(t *testing.T, video string, from time.Duration) time.Duration {
 	t.Helper()
 	out, err := exec.Command("ffmpeg", "-v", "error", "-i", video,
 		"-vf", "signalstats,metadata=mode=print:file=-", "-f", "null", "-").Output()
@@ -80,8 +127,8 @@ func flashOnset(t *testing.T, video string, from time.Duration) time.Duration {
 		t.Fatalf("ffmpeg signalstats %s: %v", video, err)
 	}
 
-	var pts time.Duration
-	seenDark := false
+	var pts, onset time.Duration
+	seenDark, found := false, false
 	sc := bufio.NewScanner(strings.NewReader(string(out)))
 	for sc.Scan() {
 		line := sc.Text()
@@ -102,12 +149,15 @@ func flashOnset(t *testing.T, video string, from time.Duration) time.Duration {
 			if yavg < brightnessThreshold {
 				seenDark = true
 			} else if seenDark {
-				return pts
+				onset, found = pts, true
+				seenDark = false // the next transition needs a new dark frame
 			}
 		}
 	}
-	t.Fatalf("no dark-to-bright transition in %s", video)
-	return 0
+	if !found {
+		t.Fatalf("no dark-to-bright transition in %s", video)
+	}
+	return onset
 }
 
 // brightestFrame returns the highest YAVG of any frame in the video.
