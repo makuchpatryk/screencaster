@@ -11,8 +11,10 @@ set -eu
 
 # --init forwards SIGTERM. Nothing else is needed: Playwright starts Chromium
 # without /dev/shm, and an app on this machine is reached by its bridge IP,
-# written into the demo's goto URLs (decision 79).
+# written into the demo's goto URLs (decision 79). --user runs the container as
+# this user, so the rendered files are not root-owned.
 exec docker run --rm --init \
+  --user "$(id -u):$(id -g)" \
   -v "$PWD:/work" -w /work \
   --entrypoint screencaster \
   ghcr.io/makuchpatryk/screencaster:@VERSION@ "$@"

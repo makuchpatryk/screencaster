@@ -25,6 +25,7 @@ func TestDockerScript_runsTheTaggedImageWithTheRenderFlags(t *testing.T) {
 		{"fails on error", "set -eu"},
 		{"removes the container", "docker run --rm"},
 		{"forwards signals", "--init"},
+		{"runs as the caller", `--user "$(id -u):$(id -g)"`},
 		{"mounts the project", `-v "$PWD:/work"`},
 		{"works in the project", "-w /work"},
 		{"the image has no ENTRYPOINT", "--entrypoint screencaster"},
