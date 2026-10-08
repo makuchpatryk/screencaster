@@ -387,8 +387,8 @@ func (s *Session) Select(selector, v string) error {
 }
 
 // Press does not wait for a navigation the key starts: that wait took up to 78 ms
-// (median 11 ms, against 6 ms without it), and narration starts at the step
-// offset, so every ms the key lands late is drift against the picture (FR-007).
+// (median 11 ms, against 6 ms without it), and narration is placed from the step
+// start, so every ms the key lands late is drift against the picture (FR-007).
 // The next step waits for its own element.
 func (s *Session) Press(selector, key string) error {
 	if selector == "" {

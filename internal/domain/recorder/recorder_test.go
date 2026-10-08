@@ -24,8 +24,8 @@ func (c *clock) sleep(ctx context.Context, d time.Duration) error {
 }
 
 // fakeSession advances the clock by actionTime for every action, fails the
-// selector in failSel, and counts Close calls. It records when Start and
-// HideMarker ran on the fake clock.
+// selector in failSel, and counts Close calls. It records when Start,
+// HideMarker and Close ran on the fake clock.
 type fakeSession struct {
 	clk        *clock
 	actionTime time.Duration
@@ -35,7 +35,7 @@ type fakeSession struct {
 	aborted    int
 	cancel     context.CancelFunc // called during the first action, if set
 
-	startedAt, hiddenAt time.Time
+	startedAt, hiddenAt, closedAt time.Time
 }
 
 func (f *fakeSession) act(sel string) error {
@@ -49,10 +49,14 @@ func (f *fakeSession) act(sel string) error {
 	return nil
 }
 
-func (f *fakeSession) Start() error                              { f.startedAt = f.clk.t; return nil }
-func (f *fakeSession) HideMarker() error                         { f.hiddenAt = f.clk.t; return f.hideErr }
-func (f *fakeSession) Abort()                                    { f.aborted++ }
-func (f *fakeSession) Close() (string, error)                    { f.closed++; return "/tmp/v.webm", nil }
+func (f *fakeSession) Start() error      { f.startedAt = f.clk.t; return nil }
+func (f *fakeSession) HideMarker() error { f.hiddenAt = f.clk.t; return f.hideErr }
+func (f *fakeSession) Abort()            { f.aborted++ }
+func (f *fakeSession) Close() (string, error) {
+	f.closed++
+	f.closedAt = f.clk.t
+	return "/tmp/v.webm", nil
+}
 func (f *fakeSession) Goto(string) error                         { return f.act("") }
 func (f *fakeSession) Click(sel string) error                    { return f.act(sel) }
 func (f *fakeSession) Hover(sel string) error                    { return f.act(sel) }
@@ -116,12 +120,42 @@ func TestRecord_unnarratedStepContinuesImmediately(t *testing.T) { // FR-007 AC2
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []time.Duration{0, 500 * time.Millisecond, time.Second}
+	want := []time.Duration{narrationLag, narrationLag + 500*time.Millisecond, narrationLag + time.Second}
 	if !reflect.DeepEqual(out.Offsets, want) {
 		t.Errorf("offsets = %v, want %v", out.Offsets, want)
 	}
 	if out.WebmPath != "/tmp/v.webm" {
 		t.Errorf("WebmPath = %q", out.WebmPath)
+	}
+}
+
+func TestRecord_recordingCoversLastNarration(t *testing.T) { // the video always covers the audio
+	clk := &clock{t: time.Unix(1000, 0)}
+	sess := &fakeSession{clk: clk, actionTime: 500 * time.Millisecond}
+
+	_, err := newRecorder(sess).Record(context.Background(), Input{
+		Steps: []script.Step{click("#a")}, Clips: map[int]time.Duration{0: 4 * time.Second}, Lang: "en",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, min := sess.closedAt.Sub(sess.hiddenAt), narrationLag+4*time.Second; got < min {
+		t.Errorf("recording lasted %v, want at least %v (the placed clip's end)", got, min)
+	}
+}
+
+func TestRecord_noTailWaitWhenStepsOutlastNarration(t *testing.T) {
+	clk := &clock{t: time.Unix(1000, 0)}
+	sess := &fakeSession{clk: clk, actionTime: 2 * time.Second}
+
+	_, err := newRecorder(sess).Record(context.Background(), Input{
+		Steps: []script.Step{click("#a"), click("#b")}, Clips: map[int]time.Duration{0: time.Second}, Lang: "en",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sess.closedAt.Sub(sess.hiddenAt), 4*time.Second; got != want {
+		t.Errorf("recording lasted %v, want %v (two actions, no extra wait)", got, want)
 	}
 }
 
@@ -186,8 +220,8 @@ func TestRecord_offsetsStartWhenTheMarkerIsHidden(t *testing.T) { // decision 69
 	if held := sess.hiddenAt.Sub(sess.startedAt); held != MarkerHold {
 		t.Errorf("marker shown for %v, want %v", held, MarkerHold)
 	}
-	if want := []time.Duration{0, time.Second}; !reflect.DeepEqual(out.Offsets, want) {
-		t.Errorf("offsets = %v, want %v (from the marker's end)", out.Offsets, want)
+	if want := []time.Duration{narrationLag, narrationLag + time.Second}; !reflect.DeepEqual(out.Offsets, want) {
+		t.Errorf("offsets = %v, want %v (from the marker's end, plus narrationLag)", out.Offsets, want)
 	}
 }
 

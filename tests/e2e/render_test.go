@@ -391,8 +391,13 @@ func assertDrift(t *testing.T, mp4 string, intro time.Duration) {
 // measured the paint of index.html against the first narration clip (25-33 ms
 // or 59-66 ms, rarely 132-330 ms when the first page load was slow), not the
 // marker. On the marker flash, 14 renders gave 10-182 ms (median about 90 ms),
-// 5 of them above 100 ms. The press itself took 25-68 ms of that: narration
-// starts at the step offset, the flash after the press returns and paints.
+// 5 of them above 100 ms. The press itself took 25-68 ms of that: the flash
+// comes after the press returns and paints. After the press stopped waiting for
+// a navigation, 6 renders gave 11-134 ms.
+//
+// The recorder now places each clip narrationLag after its step starts
+// (decision 80), so the drift here is the remaining spread. 5 renders with it
+// gave -13 to 80 ms. A 20-run calibration and a 20-of-20 run were skipped.
 const maxDrift = 100 * time.Millisecond
 
 var (

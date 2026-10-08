@@ -20,6 +20,14 @@ import (
 // and the assembler would find nothing to align on (decision 69).
 const MarkerHold = 2 * time.Second
 
+// narrationLag is how long after a step starts its narration is placed. The
+// effect of an action reaches the video later than the step start: the call
+// returns, the page paints, the screencast delivers the frame. Placing the clip
+// at the start made the picture trail the voice by 10-180 ms, and the FR-007
+// bound (+-100 ms) failed about every second render. One fixed value for every
+// action; the wait between steps does not include it (decision 80).
+const narrationLag = 70 * time.Millisecond
+
 // Session is the browser the recorder drives. adapters/browser implements it; tests
 // use a fake. Close returns the finished video's path.
 type Session interface {
@@ -81,10 +89,10 @@ type Input struct {
 	OnStep       func(i int)
 }
 
-// Output is a finished recording. Offsets[i] is when Steps[i] starts in the
-// video measured from the end of the sync marker (never negative), for placing
-// the narration clips (FR-009.1). The assembler cuts the video at the same
-// point (decision 69).
+// Output is a finished recording. Offsets[i] is where the narration of Steps[i]
+// is placed in the video: the step's start plus narrationLag, measured from the
+// end of the sync marker (never negative), for placing the narration clips
+// (FR-009.1). The assembler cuts the video at the same point (decision 69).
 type Output struct {
 	WebmPath string
 	Offsets  []time.Duration
@@ -118,9 +126,13 @@ func (r Recorder) Record(ctx context.Context, in Input) (Output, error) {
 	t0 := r.Now()
 
 	offsets := make([]time.Duration, len(in.Steps))
+	var narrationEnd time.Duration // where the last placed clip ends, from t0
 	for i, step := range in.Steps {
 		start := r.Now()
-		offsets[i] = max(start.Sub(t0), 0)
+		offsets[i] = max(start.Sub(t0), 0) + narrationLag
+		if clip := in.Clips[i]; clip > 0 {
+			narrationEnd = max(narrationEnd, offsets[i]+clip)
+		}
 		if in.OnStep != nil {
 			in.OnStep(i)
 		}
@@ -132,6 +144,16 @@ func (r Recorder) Record(ctx context.Context, in Input) (Output, error) {
 		if err != nil {
 			sess.Abort()
 			return Output{}, stepError(ctx, in.Lang, err)
+		}
+	}
+
+	// The assembler does not trim or pad audio, so the video must cover it. The
+	// last clip is placed narrationLag late and can end after the last step does
+	// (ARCHITECTURE §5: the video always covers the audio).
+	if rest := narrationEnd - r.Now().Sub(t0); rest > 0 {
+		if err := r.Sleep(ctx, rest); err != nil {
+			sess.Abort()
+			return Output{}, err
 		}
 	}
 

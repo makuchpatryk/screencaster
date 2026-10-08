@@ -44,8 +44,8 @@ type RecordRequest struct {
 	OnStep       func(i int)
 }
 
-// Recording is a finished recording: the video file and, per step, when it
-// starts in the video.
+// Recording is a finished recording: the video file and, per step, where its
+// narration is placed in the video (the step start plus the recorder's lag).
 type Recording struct {
 	Video   string
 	Offsets []time.Duration
@@ -322,7 +322,8 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, re
 	}
 	rep.logf("[%s] recorded in %s", lang, rep.since(t))
 
-	// Offsets stay relative to the recording; the assembler adds the intro.
+	// Offsets are clip placements, relative to the recording; the assembler adds
+	// the intro.
 	asm := AssembleRequest{Video: rec.Video, Intro: intro, Outro: outro, Out: filepath.Join(dir, "out.mp4")}
 	for i := range steps { // step order keeps the ffmpeg inputs stable
 		if p, ok := clipPaths[i]; ok {
