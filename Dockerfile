@@ -63,8 +63,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     && CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/ ./cmd/... \
     && go build -o /out/playwright github.com/mxschmitt/playwright-go/cmd/playwright
 
-# runtime-base: everything but a TTS provider. Runs as root with the project
-# mounted at /work. Use `docker run --init` so SIGTERM reaches the process
+# runtime-base: everything but a TTS provider. Runs as root unless started with
+# --user; the wrapper, README, compose.yaml and make pass the caller's ids
+# (ARCHITECTURE §12). The driver and browser are readable and executable by any
+# uid. Use `docker run --init` so SIGTERM reaches the process
 # (ARCHITECTURE §6.4). Without SCREENCASTER_TTS the binaries refuse to start;
 # a provider layer sets it.
 FROM debian:bookworm-slim AS runtime-base
@@ -75,6 +77,7 @@ COPY --from=build /out/playwright /usr/local/bin/playwright
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/playwright-driver /opt/ms-playwright \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* /usr/local/bin/playwright
 COPY --from=build /out/screencaster /out/screencaster-mcp /usr/local/bin/
