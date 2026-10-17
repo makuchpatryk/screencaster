@@ -379,7 +379,7 @@ None identified by user.
   The working dir is `/work`.
 
   The README must document this Claude Code `.mcp.json` entry:
-  - command: `docker run -i --rm --add-host=host.docker.internal:host-gateway -v <project>:/work screencaster screencaster-mcp`
+  - command: `docker run -i --rm --init --user <uid>:<gid> -v <project>:/work screencaster screencaster-mcp`
 - **Acceptance criteria:**
   - Given the image, when started with the command above from Claude Code, then `render_video`, `get_render_status`, `explore_page` and `get_options` are listed as tools, and the prompt `create_demo` is listed.
   - Given a target app on host port 3000 and baseUrl `http://host.docker.internal:3000`, when rendering, then pages load.
