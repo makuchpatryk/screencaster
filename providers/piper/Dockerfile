@@ -52,7 +52,7 @@ ENV SCREENCASTER_TTS=piper \
     SCREENCASTER_PIPER_VOICES=/opt/piper/voices
 
 # runtime: what users run (FR-016). Last stage, so a plain build yields it.
-# Run: docker compose run --rm screencaster render demos/my-demo.yaml
+# Run: HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose run --rm screencaster render demos/my-demo.yaml
 FROM ${RUNTIME_BASE} AS runtime
 COPY --from=piper /opt/piper /opt/piper
 ENV SCREENCASTER_TTS=piper \

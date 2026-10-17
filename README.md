@@ -9,7 +9,7 @@ Write a YAML script, run one command, get a narrated MP4 of a website.
 Docker (run from the project folder):
 
 ```bash
-docker run --rm -v $(pwd):/work ghcr.io/makuchpatryk/screencaster screencaster render demos/my-demo.yaml
+docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/work ghcr.io/makuchpatryk/screencaster screencaster render demos/my-demo.yaml
 ```
 
 Native (Debian/Ubuntu, linux amd64), from a [release](https://github.com/makuchpatryk/screencaster/releases):
@@ -43,7 +43,7 @@ More (login cookies, intro/outro cards, screenshots, voices): [docs/PRD.md](docs
 
 ## Claude Code (MCP)
 
-Add to the project's `.mcp.json`, with `<project>` the absolute path of the folder that holds `demos/`:
+Add to the project's `.mcp.json`. Replace `<project>` with the absolute path of the folder that holds `demos/`, and `<uid>:<gid>` with the output of `id -u` and `id -g` (JSON does not run the shell, so type the numbers):
 
 ```json
 {
@@ -51,6 +51,7 @@ Add to the project's `.mcp.json`, with `<project>` the absolute path of the fold
     "screencaster": {
       "command": "docker",
       "args": ["run", "-i", "--rm", "--init",
+               "--user", "<uid>:<gid>",
                "-v", "<project>:/work", "screencaster", "screencaster-mcp"]
     }
   }

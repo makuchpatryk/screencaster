@@ -1,4 +1,4 @@
-# Run: docker compose run --rm screencaster render demos/my-demo.yaml
+# Run: HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose run --rm screencaster render demos/my-demo.yaml
 services:
   screencaster:
     # Built by `make image` (base plus providers/piper); compose cannot chain the
@@ -7,5 +7,7 @@ services:
     entrypoint: ["screencaster"]
     # Forwards SIGTERM so a stopped render cleans up.
     init: true
+    # The caller's ids, so rendered files are not root-owned. Fails if unset.
+    user: "${HOST_UID:?set HOST_UID to id -u}:${HOST_GID:?set HOST_GID to id -g}"
     volumes:
       - .:/work
