@@ -53,6 +53,12 @@ func near(img image.Image, x, y int, want color.RGBA) bool {
 // cardBackground is the built-in card's and the picture padding's colour.
 var cardBackground = color.RGBA{0x0f, 0x17, 0x2a, 0xff}
 
+// pageBackground is the fixture's marker.html (body.dark in app.css).
+var pageBackground = color.RGBA{0, 0, 0, 0xff}
+
+// minRecording is the shortest recording cardsScript can make: its 500 ms wait.
+const minRecording = 500 * time.Millisecond
+
 func writeDemo(t *testing.T, dir, name, body string) {
 	t.Helper()
 	p := filepath.Join(dir, "demos", name)
@@ -102,30 +108,53 @@ func TestRender_cliCards(t *testing.T) {
 		return outputPaths(t, res.stdout, "en")[0]
 	}
 
-	// The recording length varies a little between runs, so the card time is
-	// measured against a render of the same demo without cards.
-	const tolerance = 300 * time.Millisecond
-	plain := assertVideo(t, render("plain.yaml"))
+	// The recording length is not stable (the goto's paint can take a second
+	// under load), so a card is measured inside its own video, never against a
+	// second render. The fixture page is black and a card is dark blue, so the
+	// pixel at (5, 5) tells them apart. Only the end card has a sharp edge: the
+	// start page carries the intro picture on until the first goto paints.
+	const edge = 250 * time.Millisecond
+	assertCards := func(video string, outro bool) time.Duration {
+		t.Helper()
+		got := assertVideo(t, video)
+		if !outro {
+			if img := frameAt(t, video, got-edge); !near(img, 5, 5, pageBackground) {
+				t.Errorf("%s: the last frame is not the recorded page, want no end card", filepath.Base(video))
+			}
+			return got
+		}
+		if got < 2*defaultCard+minRecording {
+			t.Errorf("%s: %v, want at least %v (two cards + the recording)", filepath.Base(video), got, 2*defaultCard+minRecording)
+			return got
+		}
+		if img := frameAt(t, video, got-defaultCard-edge); !near(img, 5, 5, pageBackground) {
+			t.Errorf("%s: no recorded page %v before the end card's start (%v)", filepath.Base(video), edge, got-defaultCard)
+		}
+		if img := frameAt(t, video, got-defaultCard+edge); !near(img, 5, 5, cardBackground) {
+			t.Errorf("%s: no end card %v after its start (%v), want a %v card", filepath.Base(video), edge, got-defaultCard, defaultCard)
+		}
+		return got
+	}
+
+	assertCards(render("plain.yaml"), false)
 
 	def := render("default.yaml")
-	if got := assertVideo(t, def); got < plain+2*defaultCard-tolerance || got > plain+2*defaultCard+tolerance {
-		t.Errorf("default cards: %v, want about %v (recording %v + 6 s)", got, plain+2*defaultCard, plain)
-	}
+	assertCards(def, true)
 	for _, at := range []time.Duration{500 * time.Millisecond, 2500 * time.Millisecond} {
 		if img := frameAt(t, def, at); !near(img, 960, 540, cardBackground) || !near(img, 5, 5, cardBackground) {
 			t.Errorf("default intro at %v is not the dark card", at)
 		}
-	}
-	if img := frameAt(t, def, plain+2*defaultCard-time.Second); !near(img, 5, 5, cardBackground) {
-		t.Error("the last second is not the dark end card")
 	}
 
 	custom := render("custom.yaml")
 	if got, want := filepath.Dir(custom), filepath.Join(dir, "demos", "videos"); got != want {
 		t.Errorf("custom video in %s, want %s (outputDir is relative to the demo)", got, want)
 	}
-	if got := assertVideo(t, custom); got < plain+2*time.Second-tolerance || got > plain+2*time.Second+tolerance {
-		t.Errorf("custom intro, no outro: %v, want about %v", got, plain+2*time.Second)
+	if got := assertCards(custom, false); got < 2*time.Second+minRecording {
+		t.Errorf("custom intro, no outro: %v, want at least %v", got, 2*time.Second+minRecording)
+	}
+	if img := frameAt(t, custom, 1750*time.Millisecond); !near(img, 960, 540, color.RGBA{0xff, 0, 0, 0xff}) {
+		t.Error("custom intro is shorter than its 2 s")
 	}
 	img := frameAt(t, custom, 500*time.Millisecond)
 	if !near(img, 960, 540, color.RGBA{0xff, 0, 0, 0xff}) || !near(img, 100, 540, cardBackground) {
