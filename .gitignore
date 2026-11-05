@@ -45,3 +45,6 @@ Thumbs.db
 # Logs / tmp
 *.log
 tmp/
+
+# graphify knowledge graph outputs
+graphify-out/
