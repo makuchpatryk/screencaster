@@ -162,18 +162,15 @@ func ReadScript(files Files, path string) ([]byte, error) {
 	return data, nil
 }
 
-// resolveCard turns the script's intro or outro (nil: not mentioned) into a
-// Card. def is the built-in card's text, each field of which an explicit text
-// replaces. A custom image is checked here, so a missing file fails before any
-// browser or TTS work (FR-002).
+// resolveCard turns the script's intro or outro (nil: not mentioned, which
+// means no card, decision 81) into a Card. def is the built-in card's text,
+// each field of which an explicit text replaces. A custom image is checked
+// here, so a missing file fails before any browser or TTS work (FR-002).
 func resolveCard(files Files, name string, b *script.Bookend, def Card, demoDir, workDir string) (Card, failure.ValidationErrors) {
-	def.Duration = script.DefaultCardMs * time.Millisecond
-	if b == nil {
-		return def, nil
-	}
-	if b.Off {
+	if b == nil || b.Off {
 		return Card{Off: true}, nil
 	}
+	def.Duration = script.DefaultCardMs * time.Millisecond
 	c := Card{
 		Title:    cmp.Or(b.Title, def.Title),
 		Subtitle: cmp.Or(b.Subtitle, def.Subtitle),

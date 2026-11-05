@@ -21,6 +21,8 @@ languages: [en, pl]
 meta:
   title: Demo title
   description: Demo description
+intro: true
+outro: true
 steps:
   - goto: http://host.docker.internal:3000/projects
     narration:
@@ -432,7 +434,10 @@ func TestRender_cardsGetTheirTextAndAssemblerGetsStills(t *testing.T) { // decis
 }
 
 func TestRender_customImageSkipsScreenshot(t *testing.T) { // decision 63
-	script := strings.Replace(twoStepsEnPl, "steps:", "intro:\n  image: assets/logo.png\n  durationMs: 2000\nsteps:", 1)
+	script := strings.Replace(twoStepsEnPl, "intro: true\n", "intro:\n  image: assets/logo.png\n  durationMs: 2000\n", 1)
+	if script == twoStepsEnPl {
+		t.Fatal("fixture has no intro: true line to replace")
+	}
 	dir, files := workDir(script)
 	writePNG(files, dir, "demos/assets/logo.png")
 	f := &fakes{}
@@ -454,8 +459,42 @@ func TestRender_customImageSkipsScreenshot(t *testing.T) { // decision 63
 	}
 }
 
-func TestRender_cardsOffGiveNoStills(t *testing.T) { // decision 63
-	script := strings.Replace(twoStepsEnPl, "steps:", "intro: false\noutro: false\nsteps:", 1)
+func TestRender_omittedCardsGiveNoStills(t *testing.T) { // decision 81
+	script := strings.Replace(twoStepsEnPl, "intro: true\noutro: true\n", "", 1)
+	if script == twoStepsEnPl {
+		t.Fatal("fixture has no card keys to remove")
+	}
+	dir, files := workDir(script)
+	f := &fakes{}
+	req := request(dir)
+	req.LangOverride = []string{"en"}
+	var lines []string
+	req.Log = func(msg string) { lines = append(lines, msg) }
+
+	if _, err := Render(context.Background(), f.deps(files), req); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.shots) != 0 {
+		t.Errorf("screenshots = %v, want none (no browser launch for cards)", f.shots)
+	}
+	if asm := f.asmIn[0]; asm.Intro != nil || asm.Outro != nil {
+		t.Errorf("stills = %+v, %+v, want none", asm.Intro, asm.Outro)
+	}
+	if got := f.recIn[0].StartImage; got != "" {
+		t.Errorf("StartImage = %q, want none without an intro", got)
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "cards:") {
+			t.Errorf("log line %q, want no cards line", line)
+		}
+	}
+}
+
+func TestRender_cardsOffGiveNoStills(t *testing.T) { // decisions 63, 81
+	script := strings.Replace(twoStepsEnPl, "intro: true\noutro: true\n", "intro: false\noutro: false\n", 1)
+	if script == twoStepsEnPl {
+		t.Fatal("fixture has no card keys to replace")
+	}
 	dir, files := workDir(script)
 	f := &fakes{}
 	req := request(dir)

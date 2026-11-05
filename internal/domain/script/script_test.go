@@ -54,6 +54,7 @@ func TestParse_validSamples(t *testing.T) {
 		{"valid/cards.yaml", nil, 1},
 		{"valid/silent-narration.yaml", []string{"en", "pl"}, 2},
 		{"valid/cards-text.yaml", nil, 1},
+		{"valid/cards-true.yaml", nil, 1},
 		{"valid/screenshots-areas.yaml", nil, 6},
 		{"valid/screenshots-annotate.yaml", nil, 4},
 	}
@@ -143,13 +144,14 @@ func TestParse_decodesTargetFields(t *testing.T) {
 	}
 }
 
-func TestParse_decodesBookends(t *testing.T) { // decision 63
+func TestParse_decodesBookends(t *testing.T) { // decisions 63, 81
 	tests := []struct {
 		file      string
 		wantIntro *Bookend
 		wantOutro *Bookend
 	}{
-		{"valid/default-langs.yaml", nil, nil},
+		{"valid/default-langs.yaml", nil, nil}, // no key: nil, which means no card
+		{"valid/cards-true.yaml", &Bookend{}, &Bookend{}},
 		{"valid/cards.yaml", &Bookend{Image: "assets/logo.png", DurationMs: 4500}, &Bookend{Off: true}},
 		{"valid/cards-text.yaml",
 			&Bookend{Title: "Projects tour", Subtitle: "Create and share a project in one minute."},
@@ -191,7 +193,7 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/goto-relative.yaml", "/steps/0/goto", "goto must be an absolute http or https URL: /projects"},
 		{"invalid/cookie-no-domain.yaml", "/storageState/cookies/0", ""},
 		{"invalid/storagestate-is-path.yaml", "/storageState", ""},
-		{"invalid/intro-true.yaml", "/intro", ""},
+		{"invalid/intro-string.yaml", "/intro", ""},
 		{"invalid/intro-image-and-title.yaml", "/intro", ""},
 		{"invalid/outro-image-and-subtitle.yaml", "/outro", ""},
 		{"invalid/intro-image-not-png.yaml", "/intro/image", ""},
@@ -200,6 +202,7 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/screenshot-in-video.yaml", "/steps/1/screenshot", "screenshot steps need type: screenshots"},
 		{"invalid/screenshots-narration.yaml", "/steps/1/narration", "narration is not allowed in a screenshots script"},
 		{"invalid/screenshots-intro.yaml", "/intro", "intro is not allowed in a screenshots script"},
+		{"invalid/screenshots-intro-true.yaml", "/intro", "intro is not allowed in a screenshots script"},
 		{"invalid/screenshots-outro.yaml", "/outro", "outro is not allowed in a screenshots script"},
 		{"invalid/screenshots-languages.yaml", "/languages", "languages is not allowed in a screenshots script"},
 		{"invalid/screenshots-voices.yaml", "/voices", "voices is not allowed in a screenshots script"},
@@ -242,7 +245,7 @@ func TestParse_oneRootCausePerBrokenStep(t *testing.T) {
 		{"invalid/two-actions.yaml", "/steps/0"},
 		{"invalid/baseurl-removed.yaml", "/baseUrl"},
 		{"invalid/goto-relative.yaml", "/steps/0/goto"},
-		{"invalid/intro-true.yaml", "/intro"},
+		{"invalid/intro-string.yaml", "/intro"},
 		{"invalid/intro-image-and-title.yaml", "/intro"},
 		{"invalid/intro-image-not-png.yaml", "/intro/image"},
 		{"invalid/intro-duration-short.yaml", "/intro/durationMs"},
@@ -712,6 +715,8 @@ func TestCheckType_rules(t *testing.T) {
 			failure.ValidationErrors{{Pointer: "/steps/0/narration", Message: "narration is not allowed in a screenshots script"}}},
 		{"screenshots, empty narration object", Script{Type: TypeScreenshots, Steps: []Step{silent}},
 			failure.ValidationErrors{{Pointer: "/steps/0/narration", Message: "narration is not allowed in a screenshots script"}}},
+		{"screenshots, intro true", Script{Type: TypeScreenshots, Steps: []Step{shot}, Intro: &Bookend{}},
+			failure.ValidationErrors{{Pointer: "/intro", Message: "intro is not allowed in a screenshots script"}}},
 		{"screenshots, every video field", Script{
 			Type: TypeScreenshots, Steps: []Step{shot},
 			Languages: []string{"en"}, Voices: map[string]string{"en": "v"}, Intro: &Bookend{Off: true}, Outro: &Bookend{},

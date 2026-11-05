@@ -9,6 +9,11 @@ Examples:
 - `Add scroll action to executor`
 - `Check script type before validation for tool errors`
 
+## Pull requests
+
+- **Short description:** a few lines, as short as possible; no long summaries or test checklists
+- **No co-author line** and no generated-by footer
+
 ## Skills
 
 Use the screencaster-* skills:

@@ -1,0 +1,6 @@
+# Built-in cards opted in: true and {}.
+name: cards-true
+intro: true
+outro: {}
+steps:
+  - goto: http://host.docker.internal:3000/

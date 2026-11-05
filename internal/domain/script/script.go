@@ -64,10 +64,12 @@ func (s Script) Kind() string { return cmp.Or(s.Type, TypeVideo) }
 // says otherwise (ARCHITECTURE §5, decision 63).
 const DefaultCardMs = 3000
 
-// Bookend is the start or end card. A nil *Bookend in Script means the
-// built-in card with default text; Off means no card. Image, when set, is a
-// path relative to the demo file's folder and replaces the built-in card, so
-// the schema rejects it together with Title or Subtitle.
+// Bookend is the start or end card. A nil *Bookend in Script means the key was
+// not mentioned, which means no card (decision 81). Off is an explicit
+// `false`; `true` and `{}` decode to the zero Bookend, the built-in card with
+// default text. Image, when set, is a path relative to the demo file's folder
+// and replaces the built-in card, so the schema rejects it together with Title
+// or Subtitle.
 type Bookend struct {
 	Off        bool   `json:"-"`
 	Image      string `json:"image"`
@@ -76,11 +78,16 @@ type Bookend struct {
 	DurationMs int    `json:"durationMs"`
 }
 
-// UnmarshalJSON maps the schema's `false` to Off. Nothing else is custom: the
-// schema already rejected `true` and every other scalar.
+// UnmarshalJSON maps the schema's `false` to Off and `true` to the zero
+// Bookend. Nothing else is custom: the schema already rejected every other
+// scalar.
 func (b *Bookend) UnmarshalJSON(data []byte) error {
-	if string(bytes.TrimSpace(data)) == "false" {
+	switch string(bytes.TrimSpace(data)) {
+	case "false":
 		*b = Bookend{Off: true}
+		return nil
+	case "true":
+		*b = Bookend{} // the built-in card with default text, like {}
 		return nil
 	}
 	type plain Bookend // no methods, so no recursion
