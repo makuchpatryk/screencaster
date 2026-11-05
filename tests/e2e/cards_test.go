@@ -70,8 +70,8 @@ func writeDemo(t *testing.T, dir, name, body string) {
 	}
 }
 
-// Decision 63: by default a video is 3 s card + recording + 3 s card, a custom
-// image replaces the card, and false removes it. Decision 62: the picture and
+// Decision 63, 81: cards only when set; true is the built-in card, an image
+// replaces it, and omitted or false is none. Decision 62: the picture and
 // the output folder are relative to the demo file.
 func TestRender_cliCards(t *testing.T) {
 	t.Parallel()
@@ -95,8 +95,8 @@ func TestRender_cliCards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeDemo(t, dir, "plain.yaml", fmt.Sprintf(cardsScript, base, "intro: false\noutro: false\n"))
-	writeDemo(t, dir, "default.yaml", fmt.Sprintf(cardsScript, base, ""))
+	writeDemo(t, dir, "plain.yaml", fmt.Sprintf(cardsScript, base, ""))
+	writeDemo(t, dir, "default.yaml", fmt.Sprintf(cardsScript, base, "intro: true\noutro: true\n"))
 	writeDemo(t, dir, "custom.yaml", fmt.Sprintf(cardsScript, base, "outputDir: videos\nintro:\n  image: assets/logo.png\n  durationMs: 2000\noutro: false\n"))
 
 	render := func(demo string) string {

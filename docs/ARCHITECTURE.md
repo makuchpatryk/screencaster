@@ -117,7 +117,7 @@ sequenceDiagram
     loop each language, in order
         R->>T: synthesize clip per narrated step (ttsWorkers at a time)
         T-->>R: wav + durationMs
-        R->>B: screenshot built-in cards (one launch)
+        R->>B: screenshot built-in cards (one launch, only when one is set)
         R->>B: record(steps, clips)
         B-->>R: webm + stepOffsets
         R->>A: assemble(webm, clips@offsets, intro, outro, meta): cut at the sync marker
@@ -162,7 +162,7 @@ t0 (end of the sync marker) ─────────────────�
 - Per step: record the offset, start the action, then wait until `max(actionEnd, start + clipDuration)` if narrated, where `start` is the step's start without `narrationLag`, else continue at `actionEnd` (BR-003, FR-007).
 - Narration is not played while recording. The assembler places each clip at its offset and mixes offline, so sync does not depend on real-time playback.
 - The transcode forces a constant frame rate, so video time equals wall time and offsets stay valid (Decision 50).
-- The video is `intro card + recording + outro card`. The recorder knows nothing of the cards: its offsets are relative to the recording and the assembler adds the intro length. Every concat input is finite.
+- The video is `[intro card] + recording + [outro card]`; a card is there only when the script sets it (Decision 81). The recorder knows nothing of the cards: its offsets are relative to the recording and the assembler adds the intro length. Every concat input is finite.
 - Output length is the video length (FR-009.4). Clips are placed `narrationLag` after their step, so after the last step the recorder waits until the last placed clip ends before it closes the video: the video always covers the audio; the assembler mixes clips without padding.
 - Drift target ±100 ms (FR-007), checked by the e2e test with the same bound, on the marker flash. The picture shows an action's effect 11–134 ms after the step starts, so `narrationLag` (70 ms, one value for every action, Decision 80) shifts the narration. With it, 5 local renders gave −13 to 80 ms (§17.1).
 
@@ -331,7 +331,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 and 72–75 are also in the PRD log; 56, 57, 61, 65–71 and 76–79 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64, 72–75 and 81 are also in the PRD log; 56, 57, 61, 65–71 and 76–80 are only here.
 
 | # | Decision | Why |
 |---|----------|-----|
@@ -354,7 +354,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 
 | 60 | No project-level voice defaults: script, then built-in | Follows from 58. |
 | 61 | `storageState` is an inline object in Playwright's shape, not a file path | One self-contained file; no existence or path checks. |
 | 62 | Demo paths resolve against the demo's folder and must stay inside the working directory. Supersedes the rejection in 58 | A demo, its videos and its pictures move together. |
-| 63 | Every video gets a start and end card unless `false`; built-in cards are an embedded HTML page screenshotted by Chromium, a custom `image` is used as is; the assembler joins them with `concat` and shifts clip offsets by the intro | Chromium wraps text and has the Polish glyphs. Recorded cards would meet the bimodal start (§17.1). |
+| 63 | Every video gets a start and end card unless `false` (default amended by 81); built-in cards are an embedded HTML page screenshotted by Chromium, a custom `image` is used as is; the assembler joins them with `concat` and shifts clip offsets by the intro | Chromium wraps text and has the Polish glyphs. Recorded cards would meet the bimodal start (§17.1). |
 | 64 | Render log lines come from `renderer` through `Request.Log`; the caller chooses stderr or `slog` | One place for the wording; nothing on stdout. |
 | 65 | The TTS provider sits behind `tts.Engine`, chosen by `SCREENCASTER_TTS` at startup; the image is `runtime-base` plus one provider layer, and each layer lives in its own `providers/<name>/` folder, not in the root `Dockerfile` | A new provider is one adapter, one `wire.TTS` case and one folder. Piper details stay in `internal/adapters/tts/piper` and `providers/piper`; the image owns the provider and its paths. |
 | 66 | Stay on `github.com/mxschmitt/playwright-go`; no move to `playwright-community` | Both paths serve v0.6201.1 from the same commit, and from v0.6100 the upstream `go.mod` declares the mxschmitt path, so requiring the community path fails with "module declares its path as …". Re-check on every playwright-go bump. |
@@ -372,6 +372,7 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64 
 | 78 | `baseUrl` is removed; every `goto` is an absolute http(s) URL, checked by `domain/script` (`AbsoluteHTTP`) and passed through the executor unchanged; a relative `goto` fails at `/steps/<i>/goto`; a script that still has `baseUrl` gets one hint at `/baseUrl` and no other error. Amends 27 (PRD), 58 and 59 | A deprecation warning; the hint plus the schema errors (the decision 70 pattern); resolving against the explored page in `explore_page` | User choice: a hard break. One URL rule in Go, no resolution code in the executor, no base plumbing through shooter, recorder, explorer and browser. Cost: a demo hardcodes the app's address. |
 | 79 | The Docker wrapper (`screencaster-docker`), `compose.yaml` and `make` targets set neither `--shm-size` nor `--add-host`. Playwright's default Chromium switches include `--disable-dev-shm-usage`; a Linux host app is reached by the bridge IP in the demo, Docker Desktop by `host.docker.internal`. Amends 76's wrapper flags | Resolving `host.docker.internal` to the gateway in Go (`/proc/net/route`, `--host-resolver-rules`); keeping `--add-host` for host-app demos | User choice: the shortest command that renders; no DNS code, no native-run question. A Playwright upgrade that drops the switch brings back the shared-memory crash: `make e2e` runs without the flag and catches it. |
 | 80 | The recorder places each narration clip `narrationLag` (70 ms, a constant) after its step starts, for every action, and after the last step waits until the last placed clip ends. The wait between steps stays `start + clip`. Amends 69 (no bias constant) | A per-run calibration probe; detecting the effect frame in the video; taking the offset after the action returns; waiting `start + lag + clip`; shifting in the assembler or renderer | Paint and screencast latency put the effect 11–134 ms after the step start, so half the renders broke ±100 ms. A constant centres the spread, adds no run time beyond the tail, and keeps FR-007 spacing exact. The old no-bias note measured the paint of `index.html`, not the marker. Cost: one value for every machine; `goto` is not exact. |
+| 81 | Cards are off unless set: a nil `Bookend` means none, decided only in `renderer.resolveCard`; `true` decodes to the zero `Bookend`, and `false` stays `Off` so screenshots scripts still reject it. Amends 63's default | An `On` flag; `false` as nil | One place for the default; no new field. |
 
 ## 17. Open items for spikes
 

@@ -111,23 +111,23 @@ Downstream already handles an off card: `buildCards` (`internal/app/renderer/ren
 - **Option E: only `{}` opts in, with no `true`.** The user chose `true` as well, because it reads better for humans and LLMs.
 
 ## Implementation Steps
-1. [ ] `internal/domain/script/script.schema.json`: set `$defs/bookend` `else` to `{ "type": "boolean" }`, and update the `intro`, `outro` and `bookend` descriptions as in Key Changes.
-2. [ ] `internal/domain/script/script.go`:
+1. [x] `internal/domain/script/script.schema.json`: set `$defs/bookend` `else` to `{ "type": "boolean" }`, and update the `intro`, `outro` and `bookend` descriptions as in Key Changes.
+2. [x] `internal/domain/script/script.go`:
    - Add the `"true"` case to `Bookend.UnmarshalJSON` (zero `Bookend`).
    - Rewrite the `Bookend` and `UnmarshalJSON` doc comments (nil = no card, decision 81).
    - `checkType` is unchanged.
-3. [ ] Testdata under `testdata/scripts/`:
+3. [x] Testdata under `testdata/scripts/`:
    - `git mv invalid/intro-true.yaml valid/cards-true.yaml`. Its content becomes a comment "# Built-in cards opted in: true and {}." plus `intro: true`, `outro: {}` and one `goto` step.
    - Add `invalid/intro-string.yaml` (`intro: "yes"`). This keeps a scalar-rejection sample, expected at `/intro`.
    - Add `invalid/screenshots-intro-true.yaml` (`type: screenshots`, `intro: true`, one `screenshot: true` step), expected at `/intro` with `intro is not allowed in a screenshots script`.
    - Check that `testdata/scripts/valid/` is enumerated in `TestParse_validSamples` (`script_test.go` around line 54), and add `valid/cards-true.yaml` there if the list is explicit.
-4. [ ] `internal/domain/script/script_test.go`:
+4. [x] `internal/domain/script/script_test.go`:
    - `TestParse_decodesBookends`: add `{"valid/cards-true.yaml", &Bookend{}, &Bookend{}}`, and comment the `default-langs.yaml` row as "no key: nil, which means no card".
    - `TestParse_invalidSamples`: remove the `invalid/intro-true.yaml` row (line 194). Add the `invalid/intro-string.yaml` row (`/intro`, `""`) and the `invalid/screenshots-intro-true.yaml` row.
    - `TestParse_oneRootCausePerBrokenStep`: replace the `invalid/intro-true.yaml` row (line 245) with `invalid/intro-string.yaml`.
    - checkType table (around line 717): add a screenshots case with `Intro: &Bookend{}` (the `true` form) that is rejected at `/intro`.
-5. [ ] `internal/app/renderer/plan.go` `resolveCard`: nil or `Off` returns `Card{Off: true}`, the default duration is set after that check, and the doc comment is updated.
-6. [ ] `internal/app/renderer/plan_test.go`:
+5. [x] `internal/app/renderer/plan.go` `resolveCard`: nil or `Off` returns `Card{Off: true}`, the default duration is set after that check, and the doc comment is updated.
+6. [x] `internal/app/renderer/plan_test.go`:
    - Rename `TestPrepare_cardsDefaultToBuiltIn` to `TestPrepare_cards` (comment: decisions 63, 81).
    - Rows:
      - Row 1: extra `metaBlock + "intro: true\noutro: true\n"`.
@@ -135,23 +135,23 @@ Downstream already handles an off card: `buildCards` (`internal/app/renderer/ren
      - Add "omitted: no cards", with extra `metaBlock` and both cards `Card{Off: true}`.
      - Keep the explicit-text and `false` rows.
    - `TestPrepare_cardImageResolvesAgainstDemoDir` (lines 409–410): the omitted outro is now off, so assert `plan.Outro == (Card{Off: true})` with the message "want no end card".
-7. [ ] `internal/app/renderer/render_test.go`:
+7. [x] `internal/app/renderer/render_test.go`:
    - Add `intro: true\noutro: true\n` to the shared `twoStepsEnPl` fixture (line 16) after the `meta` block, so the card call lists, the log lines, the timings (`38s`/`36s`) and the cards-failure tests keep their meaning.
    - `TestRender_customImageSkipsScreenshot` (line 435): replace on the key, not on `steps:`, to avoid a duplicate key: `strings.Replace(twoStepsEnPl, "intro: true\n", "intro:\n  image: assets/logo.png\n  durationMs: 2000\n", 1)`.
    - `TestRender_cardsOffGiveNoStills` (line 458): replace `"intro: true\noutro: true\n"` with `"intro: false\noutro: false\n"`.
    - Add `TestRender_omittedCardsGiveNoStills`: the fixture with both keys removed. Assert that `f.shots` is empty, the assembler got nil `Intro`/`Outro`, `StartImage` is empty, and no log line contains `cards:`.
    - Make sure every `strings.Replace` on the fixture still matches exactly once (check the returned string differs).
-8. [ ] `internal/adapters/mcpserver/create_demo.md`: replace the card sentence in step 4 with the Key Changes text. Grep `internal/adapters/mcpserver/server_test.go` for the old wording ("start card", "Every video gets"), and update any assertion.
-9. [ ] Demos:
+8. [x] `internal/adapters/mcpserver/create_demo.md`: replace the card sentence in step 4 with the Key Changes text. Grep `internal/adapters/mcpserver/server_test.go` for the old wording ("start card", "Every video gets"), and update any assertion.
+9. [x] Demos:
    - `demos/portfolio-projects.yaml`: add `outro: true` right after the `intro:` block.
    - `demos/cli-demo/demo.yaml`: delete `intro: false` and `outro: false` (lines 3–4).
-10. [ ] E2E edits (user-approved exception; edit only, never run):
+10. [x] E2E edits (user-approved exception; edit only, never run):
     - `tests/e2e/render_test.go` `renderScript` (line 31): add `intro: true` and `outro: true` after the `meta:` block, before `steps:`. The drift check keeps its 3 s intro shift (`assertDrift(…, defaultCard)`, line 179) and the `[en] cards: 2 built in` log check.
     - `tests/e2e/cards_test.go` line 98: `plain.yaml` uses `""` (tests the new default: no cards).
     - `tests/e2e/cards_test.go` line 99: `default.yaml` uses `"intro: true\noutro: true\n"`.
     - `custom.yaml` is unchanged.
     - Update the decision comment at line 73 to "Decision 63, 81: cards only when set; `true` is the built-in card, an image replaces it, and omitted or `false` is none."
-11. [ ] PRD `docs/PRD.md`:
+11. [x] PRD `docs/PRD.md`:
     - §10.1 line 151: "An optional start card and end card per video (off unless set; built in, the developer's own picture, or custom text)."
     - FR-001 line 216: "`intro`, `outro` (optional; omitted or `false` for no card, `true` or `{}` for the built-in card, or an object `{image?, title?, subtitle?, durationMs?}`; see FR-009)."
     - FR-001 line 218: drop "`intro: true`" from the schema-error list.
@@ -165,19 +165,21 @@ Downstream already handles an off card: `buildCards` (`internal/app/renderer/ren
       - Alternatives: "Keep default-on (63); reject `false`; only `{}` opts in."
       - Why: "User choice (issue #2). A demo is plain unless cards are asked for; `false` stays valid so existing scripts keep working."
     - Row 63: append "(default amended by 81)".
-12. [ ] ARCHITECTURE `docs/ARCHITECTURE.md`:
+12. [x] ARCHITECTURE `docs/ARCHITECTURE.md`:
     - §4 sequence note (line 120): "screenshot built-in cards (one launch, only when one is set)".
     - §5 line 165: "The video is `[intro card] + recording + [outro card]`; a card is there only when the script sets it (Decision 81)."
     - Row 63: append "(default amended by 81)".
     - Add row 81 after row 80: "Cards are off unless set; nil `Bookend` means none, decided only in `renderer.resolveCard`; `true` decodes to the zero `Bookend`, `false` stays `Off` so screenshots scripts still reject it." Alternatives: "`On` flag; `false` as nil." Why: "One place for the default; no new field."
     - CODE_QUALITY `docs/CODE_QUALITY.md` DRY row 61: as in Fit with Project Docs.
-13. [ ] Stale-wording sweep: `grep -rn "every video\|Every video\|unless \`false\`\|intro: true\` and\|Omit for the built-in" docs internal demos tests README.md`. It must find nothing stale outside `specs/`. Fix any hit.
+13. [x] Stale-wording sweep: `grep -rn "every video\|Every video\|unless \`false\`\|intro: true\` and\|Omit for the built-in" docs internal demos tests README.md`. It must find nothing stale outside `specs/`. Fix any hit.
+14. [x] Fix R1: `docs/ARCHITECTURE.md:334` numbering note lists 81 as also in the PRD log and 76–80 as only here.
 
 ## Checkpoints (Todo List)
-- [ ] CP1 — Domain parse: steps 1–4. Evidence: `go test ./internal/domain/script/...` green.
-- [ ] CP2 — Renderer default flip: steps 5–7. Evidence: `go test ./internal/app/renderer/...` green.
-- [ ] CP3 — Prompt, demos and e2e edits: steps 8–10. Evidence: `go test ./internal/adapters/mcpserver/...` green, and `make vet` clean (it vets with `-tags e2e ./...`, so the edited e2e files compile; nothing runs).
-- [ ] CP4 — Docs and final light verification: steps 11–13. Evidence: PRD, ARCHITECTURE and CODE_QUALITY sections updated, decision 81 present in both PRD and ARCHITECTURE, the step-13 grep is clean, and `make lint`, `make vet` and `make test` are clean (only the checks the user selects; no e2e run, which is CI on the PR).
+- [x] CP1 — Domain parse: steps 1–4. Evidence: `go test ./internal/domain/script/...` green. — tests not run (not selected); rows and samples added
+- [x] CP2 — Renderer default flip: steps 5–7. Evidence: `go test ./internal/app/renderer/...` green. — tests not run (not selected)
+- [x] CP3 — Prompt, demos and e2e edits: steps 8–10. Evidence: `go test ./internal/adapters/mcpserver/...` green, and `make vet` clean (it vets with `-tags e2e ./...`, so the edited e2e files compile; nothing runs). — tests and vet not run (not selected)
+- [x] CP4 — Docs and final light verification: steps 11–13. Evidence: PRD, ARCHITECTURE and CODE_QUALITY sections updated, decision 81 present in both PRD and ARCHITECTURE, the step-13 grep is clean, and `make lint`, `make vet` and `make test` are clean (only the checks the user selects; no e2e run, which is CI on the PR). — docs and grep done; lint, vet, tests not run (not selected)
+- [x] CP5 — Review fixes: step 14; selected checks (lint, vet, tests) green. — lint, vet, tests PASS
 
 ### Risks & Mitigations
 - **Risk:** scripts outside the repo silently lose their cards (6 s shorter, different look).
@@ -239,3 +241,41 @@ Downstream already handles an off card: `buildCards` (`internal/app/renderer/ren
 - Decision: e2e fixture `renderScript`?: Opt in with `intro: true` + `outro: true`
 - Decision: `cards_test.go` cases?: `plain.yaml` omits both, `default.yaml` uses `true`; `false` covered by unit tests only
 - Decision: MCP `create_demo` prompt?: No cards by default; add only when the developer asks
+- Decision: workspace: worktree
+- Decision: checks: none (user selected no checks; none run)
+- Note: worktree base is `main` at 0abf352 (spec text says `skills-e2e-security`@75111d2); main checkout was clean
+- Step 1 — started
+- Step 1 — done — files: internal/domain/script/script.schema.json — else-branch now boolean, intro/outro/bookend descriptions updated
+- Step 2 — started
+- Step 2 — done — files: internal/domain/script/script.go — `true` case in Bookend.UnmarshalJSON, doc comments rewritten (decision 81)
+- Step 3 — started
+- Step 3 — done — files: testdata/scripts/valid/cards-true.yaml (git mv from invalid/intro-true.yaml), testdata/scripts/invalid/intro-string.yaml, testdata/scripts/invalid/screenshots-intro-true.yaml — valid list in TestParse_validSamples is explicit, row added in step 4
+- Step 4 — started
+- Step 4 — done — files: internal/domain/script/script_test.go — validSamples + decodesBookends rows for cards-true, intro-string replaces intro-true (2 tables), screenshots-intro-true row, checkType "intro true" row
+- Step 5 — started
+- Step 5 — done — files: internal/app/renderer/plan.go — nil or Off returns Card{Off:true}; duration default set after; doc comment updated
+- Step 6 — started
+- Step 6 — done — files: internal/app/renderer/plan_test.go — TestPrepare_cards (true, {}, omitted rows), outro image test asserts no end card
+- Step 7 — started
+- Step 7 — done — files: internal/app/renderer/render_test.go — fixture opted in; custom-image test replaces on key; TestRender_omittedCardsGiveNoStills added (checks req.Log lines, not f.log); cardsOff test replaces key; each Replace guarded against no-op
+- Step 8 — started
+- Step 8 — done — files: internal/adapters/mcpserver/create_demo.md — card sentence replaced with the spec text; server tests have no assertion on the old wording
+- Step 9 — started
+- Step 9 — done — files (main checkout, git-ignored, user-approved): demos/portfolio-projects.yaml (outro: true added), demos/cli-demo/demo.yaml (intro/outro: false removed) — not in the branch diff
+- Step 10 — started
+- Step 10 — done — files: tests/e2e/render_test.go (renderScript only; publicScript/failingScript untouched), tests/e2e/cards_test.go — edit only, e2e not run (screencaster-e2e / CI)
+- Step 11 — started
+- Step 11 — done — files: docs/PRD.md — §10.1, FR-001 (2 lines), FR-009 item 5 + acceptance, decisions row 81 and note on 63
+- Step 12 — started
+- Step 12 — done — files: docs/ARCHITECTURE.md, docs/CODE_QUALITY.md — §4 note, §5 line, rows 63 and 81, DRY row
+- Step 13 — started
+- Step 13 — done — sweep found only historical decision rows (63) and the PRD glossary "3 s by default" (duration, still true); nothing stale
+- Fix round — Decision: workspace: worktree
+- Fix round — Decision: checks: lint, vet, tests
+- Step 14 — started
+- Step 14 — done — files: docs/ARCHITECTURE.md — numbering note now lists 81 as also in the PRD log and 76–80 as only here (R1)
+- Handoff — mode: worktree — branch: feature/cards-off-by-default — base: 0abf352 — checks: lint, vet, tests — changed: docs/ARCHITECTURE.md, docs/CODE_QUALITY.md, docs/PRD.md, internal/adapters/mcpserver/create_demo.md, internal/app/renderer/plan.go, internal/app/renderer/plan_test.go, internal/app/renderer/render_test.go, internal/domain/script/script.go, internal/domain/script/script.schema.json, internal/domain/script/script_test.go, specs/cards-off-by-default.md, testdata/scripts/valid/cards-true.yaml, testdata/scripts/invalid/intro-true.yaml (moved), testdata/scripts/invalid/intro-string.yaml, testdata/scripts/invalid/screenshots-intro-true.yaml, tests/e2e/cards_test.go, tests/e2e/render_test.go — preexisting: none (demos/portfolio-projects.yaml and demos/cli-demo/demo.yaml edited in main checkout, git-ignored) — checkpoints: 5/5
+
+## Review
+Reviewed 2026-11-05 (re-review after R1 fix) — checks run: lint PASS, vet PASS, tests PASS (cached results)
+No findings.

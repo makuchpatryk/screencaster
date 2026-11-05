@@ -1,4 +1,4 @@
 name: demo
-intro: true
+intro: "yes"
 steps:
   - goto: http://host.docker.internal:3000/

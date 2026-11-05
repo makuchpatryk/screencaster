@@ -33,6 +33,8 @@ const renderScript = `name: e2e-demo
 meta:
   title: E2E demo
   description: Every action plus the drift marker.
+intro: true
+outro: true
 steps:
   - goto: %[1]s/index.html
     narration:

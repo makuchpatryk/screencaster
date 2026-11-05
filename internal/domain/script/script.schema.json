@@ -46,11 +46,11 @@
       }
     },
     "intro": {
-      "description": "Card shown for 3 s before the recording. Omit for the built-in card (title and description), false for none.",
+      "description": "Card shown before the recording. Omit or false for none; true or {} for the built-in card (title and description); an object to change its text, image or time.",
       "$ref": "#/$defs/bookend"
     },
     "outro": {
-      "description": "Card shown for 3 s after the recording. Omit for the built-in card (closing line and title), false for none.",
+      "description": "Card shown after the recording. Omit or false for none; true or {} for the built-in card (closing line and title); an object to change its text, image or time.",
       "$ref": "#/$defs/bookend"
     },
     "steps": {
@@ -62,7 +62,7 @@
   },
   "$defs": {
     "bookend": {
-      "description": "Start or end card: false for none, or an object. Without image the built-in card is drawn from title and subtitle.",
+      "description": "Start or end card: false for none, true for the built-in card, or an object. Without image the built-in card is drawn from title and subtitle.",
       "if": { "type": "object" },
       "then": {
         "additionalProperties": false,
@@ -81,7 +81,7 @@
           { "not": { "required": ["image", "subtitle"] } }
         ]
       },
-      "else": { "const": false }
+      "else": { "type": "boolean" }
     },
     "storageState": {
       "type": "object",

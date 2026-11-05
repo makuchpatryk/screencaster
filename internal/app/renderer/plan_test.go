@@ -348,7 +348,7 @@ func writePNG(files *memFS, dir, rel string) {
 
 const metaBlock = "meta:\n  title: Tour\n  description: A short tour.\n"
 
-func TestPrepare_cardsDefaultToBuiltIn(t *testing.T) { // decision 63
+func TestPrepare_cards(t *testing.T) { // decisions 63, 81
 	tests := []struct {
 		name      string
 		extra     string
@@ -356,16 +356,22 @@ func TestPrepare_cardsDefaultToBuiltIn(t *testing.T) { // decision 63
 		wantOutro Card
 	}{
 		{
-			"title and description from meta; outro title left for the language",
-			metaBlock,
+			"true: title and description from meta; outro title left for the language",
+			metaBlock + "intro: true\noutro: true\n",
 			Card{Title: "Tour", Subtitle: "A short tour.", Duration: 3 * time.Second},
 			Card{Subtitle: "Tour", Duration: 3 * time.Second},
 		},
 		{
-			"no meta: the name is the title",
-			"",
+			"{} and no meta: the name is the title",
+			"intro: {}\noutro: {}\n",
 			Card{Title: "demo", Duration: 3 * time.Second},
 			Card{Subtitle: "demo", Duration: 3 * time.Second},
+		},
+		{
+			"omitted: no cards",
+			metaBlock,
+			Card{Off: true},
+			Card{Off: true},
 		},
 		{
 			"explicit text replaces each default field on its own, durationMs sets the time",
@@ -406,8 +412,8 @@ func TestPrepare_cardImageResolvesAgainstDemoDir(t *testing.T) { // decision 62
 	if plan.Intro != want {
 		t.Errorf("Intro = %+v, want %+v (the picture is the whole card, no text)", plan.Intro, want)
 	}
-	if plan.Outro.Image != "" || plan.Outro.Off {
-		t.Errorf("Outro = %+v, want the built-in card", plan.Outro)
+	if plan.Outro != (Card{Off: true}) {
+		t.Errorf("Outro = %+v, want no end card", plan.Outro)
 	}
 }
 
