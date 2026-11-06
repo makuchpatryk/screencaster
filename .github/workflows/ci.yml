@@ -43,5 +43,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # ubuntu-latest's kernel restricts unprivileged user namespaces (the
+      # same Ubuntu 24.04+ default Decision 83's AppArmor profile targets on
+      # native installs); the runner has no per-binary AppArmor profile for
+      # the dev image's Chromium, so the sandbox needs this master switch off
+      # for the job instead. Container-local, not a product change: the
+      # shipped seccomp profile (scripts/seccomp-chromium.json) is unchanged.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: make dev-image PROVIDER=piper
       - run: make e2e PROVIDER=piper E2E_RACE=-race
