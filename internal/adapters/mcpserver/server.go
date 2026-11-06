@@ -155,7 +155,7 @@ func (h handlers) takeScreenshots(ctx context.Context, _ *mcp.CallToolRequest, i
 // takes; a script of the other type is refused with the tool to use instead.
 func (h handlers) enqueue(ctx context.Context, scriptPath string, languages []string, kind string) (renderOut, error) {
 	// The tool input is LLM-written, so the script path is not trusted (decision 58).
-	path, err := renderer.ScriptPath(h.WorkDir, scriptPath)
+	path, err := renderer.ScriptPath(h.Files, h.WorkDir, scriptPath)
 	if err != nil {
 		return renderOut{}, err
 	}

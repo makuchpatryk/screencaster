@@ -199,7 +199,7 @@ func Render(ctx context.Context, d Deps, req Request) (_ []Output, err error) {
 	defer func() { _ = d.Files.RemoveAll(runDir) }()
 
 	if plan.Type == script.TypeScreenshots {
-		return renderShots(ctx, d, plan, runDir, start, rep)
+		return renderShots(ctx, d, plan, req.WorkDir, runDir, start, rep)
 	}
 	return renderVideo(ctx, d, plan, runDir, start, rep)
 }
@@ -232,7 +232,7 @@ const shotsSubdir = "screenshots"
 // renderShots takes the screenshots into the temp dir, then publishes them
 // over the previous run's. Nothing reaches outputDir when a step fails
 // (BR-004).
-func renderShots(ctx context.Context, d Deps, plan Plan, runDir string, start time.Time, rep reporter) ([]Output, error) {
+func renderShots(ctx context.Context, d Deps, plan Plan, workDir, runDir string, start time.Time, rep reporter) ([]Output, error) {
 	shotDir := filepath.Join(runDir, "shots")
 	if err := d.Files.MkdirAll(shotDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
@@ -250,7 +250,15 @@ func renderShots(ctx context.Context, d Deps, plan Plan, runDir string, start ti
 	}
 	rep.logf("screenshots: %d captured in %s", len(pngs), rep.since(t))
 
-	paths, err := publishShots(d.Files, filepath.Join(plan.OutputDir, plan.Script.Name, shotsSubdir), pngs)
+	// outputDir was already checked against workDir (Prepare), but the
+	// script's own Name joins onto it fresh here; a symlink could also have
+	// appeared since Prepare ran. Check again before anything is written
+	// (M3), like outputDir and the card images.
+	shotsDir, ok := within(d.Files, workDir, filepath.Join(plan.OutputDir, plan.Script.Name, shotsSubdir))
+	if !ok {
+		return nil, errors.New(outsideWorkDir("screenshots folder", shotsDir))
+	}
+	paths, err := publishShots(d.Files, shotsDir, pngs)
 	if err != nil {
 		return nil, err
 	}

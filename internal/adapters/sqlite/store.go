@@ -57,11 +57,32 @@ type Store struct {
 
 // Open opens (and creates) the database at path with WAL and a 5 s busy
 // timeout. One connection serves all callers: the load is a few queries a
-// minute, and it keeps the per-connection pragmas trivially right.
+// minute, and it keeps the per-connection pragmas trivially right. The state
+// dir is secured 0700 and the db file (and its -wal/-shm, once they exist)
+// 0600, so jobs' clear-text cookies (the script snapshot) are not
+// world-readable (M4); any of those chmods failing refuses to open rather
+// than run with a wider mode than intended (fail closed).
 func Open(path string, now func() time.Time) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
+	if err := secure(dir, 0o700); err != nil {
+		return nil, err
+	}
+	// Pre-created here, 0600, so the driver below never creates it with the
+	// process umask first.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("create %s: %w", path, err)
+	}
+	if err := secure(path, 0o600); err != nil {
+		return nil, err
+	}
+
 	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -76,7 +97,31 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// WAL mode creates -wal and -shm alongside path; secure them too, once
+	// Exec above has had the driver create them.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		p := path + suffix
+		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("stat %s: %w", p, err)
+		}
+		if err := secure(p, 0o600); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
 	return &Store{db: db, now: now}, nil
+}
+
+// secure chmods path to mode. The hint names the fix for a leftover from a
+// root-owned container run, the common way this fails (M4).
+func secure(path string, mode os.FileMode) error {
+	if err := os.Chmod(path, mode); err != nil {
+		return fmt.Errorf("secure %s: %w (fix: chown -R $(id -u):$(id -g) .screencaster)", path, err)
+	}
+	return nil
 }
 
 // addScriptColumn brings a jobs.db from before the script snapshot up to
@@ -112,14 +157,15 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) stamp() string { return s.now().UTC().Format(timeLayout) }
 
 // Recover implements BR-009: every queued or running job becomes failed with
-// the message "interrupted". It runs before the server accepts calls.
+// the message "interrupted". It runs before the server accepts calls. The
+// script snapshot is cleared too (M4): a terminal job never needs it again.
 func (s *Store) Recover(ctx context.Context) error {
 	errJSON, err := json.Marshal(toFailureRecord(failure.Interrupted()))
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE jobs SET status = ?, error_json = ?, finished_at = ? WHERE status IN (?, ?)`,
+		`UPDATE jobs SET status = ?, error_json = ?, finished_at = ?, script = NULL WHERE status IN (?, ?)`,
 		jobs.Failed, string(errJSON), s.stamp(), jobs.Queued, jobs.Running)
 	if err != nil {
 		return fmt.Errorf("mark interrupted jobs: %w", err)
@@ -229,7 +275,9 @@ func (s *Store) Start(ctx context.Context, id string) error {
 	return nil
 }
 
-// Finish stores the result: failed when f is not nil, else succeeded.
+// Finish stores the result: failed when f is not nil, else succeeded. The
+// script snapshot is cleared too (M4): render has already started (BR-007
+// keeps the row), and a terminal job never needs it again.
 func (s *Store) Finish(ctx context.Context, id string, outs []renderer.Output, f *failure.Failure) error {
 	status := jobs.Succeeded
 	var outJSON, errJSON any
@@ -248,7 +296,7 @@ func (s *Store) Finish(ctx context.Context, id string, outs []renderer.Output, f
 		outJSON = string(b)
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE jobs SET status = ?, finished_at = ?, outputs_json = ?, error_json = ? WHERE id = ?`,
+		`UPDATE jobs SET status = ?, finished_at = ?, outputs_json = ?, error_json = ?, script = NULL WHERE id = ?`,
 		status, s.stamp(), outJSON, errJSON, id)
 	if err != nil {
 		return fmt.Errorf("finish job %s: %w", id, err)

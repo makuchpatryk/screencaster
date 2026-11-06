@@ -27,7 +27,12 @@ jobs:
           echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
             || { echo "version must be X.Y.Z, got '$VERSION'"; exit 1; }
 
-      - uses: actions/checkout@v4
+      # M5: never ship from a branch or a stale fork ref.
+      - name: Only from main
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "release runs from main, got $GITHUB_REF"; exit 1; }
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # A tag at another commit would make the Release describe code that was
       # not built here. Re-running for the same commit is fine.
@@ -39,9 +44,16 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
+
+      # M5: same gate as ci.yml's check job, run again here since a release
+      # can be dispatched for a commit CI has not necessarily finished on.
+      - name: Vet and test
+        run: |
+          go vet -tags e2e ./...
+          go test -race ./...
 
       # Static binaries (the root Dockerfile builds them the same way); the
       # version reaches both mains through one -X flag. A native user runs
@@ -62,7 +74,11 @@ jobs:
             tar -C "build/$arch" -czf "dist/screencaster_${VERSION}_linux_${arch}.tar.gz" screencaster screencaster-mcp screencaster-docker
           done
 
-      - uses: docker/login-action@v3
+      # M7: lets a downloader verify what they fetched.
+      - name: Checksum the assets
+        run: (cd dist && sha256sum screencaster_*.tar.gz screencaster-docker > SHA256SUMS)
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -88,8 +104,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "v$VERSION" >/dev/null 2>&1; then
-            gh release upload "v$VERSION" dist/*.tar.gz dist/screencaster-docker --clobber
+            gh release upload "v$VERSION" dist/*.tar.gz dist/screencaster-docker dist/SHA256SUMS --clobber
           else
-            gh release create "v$VERSION" dist/*.tar.gz dist/screencaster-docker \
+            gh release create "v$VERSION" dist/*.tar.gz dist/screencaster-docker dist/SHA256SUMS \
               --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
           fi

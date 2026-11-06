@@ -14,6 +14,11 @@ type Files interface {
 	Open(name string) (io.ReadCloser, error)
 	// ReadDir lists a directory's entries; publishShots finds stale shots with it.
 	ReadDir(name string) ([]fs.DirEntry, error)
+	// EvalSymlinks resolves every symlink in name, which must exist (like
+	// filepath.EvalSymlinks); within walks up to a name that exists before
+	// calling it, so a symlinked path cannot point outside the working
+	// directory (M3).
+	EvalSymlinks(name string) (string, error)
 	// CreateExcl creates name for writing and fails if it exists, so no
 	// existing file is ever opened for writing (BR-006).
 	CreateExcl(name string) (io.WriteCloser, error)

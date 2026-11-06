@@ -18,7 +18,9 @@ DEV_RUN := docker run --rm $(CALLER) \
 	-v $(CURDIR):/src -v screencaster-go-cache:/cache $(DEV_IMAGE)
 
 # No shared-memory flag: Playwright starts Chromium with --disable-dev-shm-usage (decision 79).
-E2E_RUN := docker run --rm $(CALLER) \
+# The seccomp flag is the Chromium userns sandbox profile (decision 83); without
+# it a real launch fails with the sandbox error.
+E2E_RUN := docker run --rm $(CALLER) --security-opt seccomp=$(CURDIR)/scripts/seccomp-chromium.json \
 	-v $(CURDIR):/src -v screencaster-go-cache:/cache $(DEV_IMAGE)
 
 .PHONY: dev-image image image-base image-check test vet lint e2e e2e-runtime
@@ -70,6 +72,7 @@ e2e:
 # the test process itself, so no network is needed.
 e2e-runtime: image
 	$(DEV_RUN) go test -c -tags e2e -o /src/.screencaster/e2e.test ./tests/e2e
-	docker run --rm --init $(CALLER) -e SCREENCASTER_BIN=/usr/local/bin/screencaster \
+	docker run --rm --init $(CALLER) --security-opt seccomp=$(CURDIR)/scripts/seccomp-chromium.json \
+		-e SCREENCASTER_BIN=/usr/local/bin/screencaster \
 		-v $(CURDIR):/src -w /src/tests/e2e $(IMAGE) \
 		/src/.screencaster/e2e.test -test.run 'TestRender_cli|TestScreenshot_|TestShots_cli' -test.count=1 -test.v

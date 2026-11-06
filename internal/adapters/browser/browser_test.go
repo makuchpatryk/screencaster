@@ -120,3 +120,16 @@ func TestOverlayJS_usesAnnotationID(t *testing.T) {
 		t.Errorf("overlay.js does not use the id %q Capture removes it by", annotationID)
 	}
 }
+
+// Playwright adds --no-sandbox unless ChromiumSandbox is true, so the launch
+// must set it (decision 83, security audit M1). A launch that cannot start the
+// sandbox fails; there is no fallback.
+func TestLaunchOptions_sandboxOn(t *testing.T) {
+	o := launchOptions()
+	if o.ChromiumSandbox == nil || !*o.ChromiumSandbox {
+		t.Errorf("ChromiumSandbox = %v, want true", o.ChromiumSandbox)
+	}
+	if o.Args != nil {
+		t.Errorf("Args = %v, want none (no --no-sandbox)", o.Args)
+	}
+}

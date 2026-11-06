@@ -9,5 +9,9 @@ services:
     init: true
     # The caller's ids, so rendered files are not root-owned. Fails if unset.
     user: "${HOST_UID:?set HOST_UID to id -u}:${HOST_GID:?set HOST_GID to id -g}"
+    # Chromium's userns sandbox (decision 83); without it render fails with the
+    # sandbox error. Path is relative to this file, not the caller's $PWD.
+    security_opt:
+      - seccomp=./scripts/seccomp-chromium.json
     volumes:
       - .:/work

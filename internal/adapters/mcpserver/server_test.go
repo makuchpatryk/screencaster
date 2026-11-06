@@ -265,6 +265,29 @@ func TestRenderVideo_scriptOutsideWorkDirIsRefused(t *testing.T) {
 	}
 }
 
+// M3: a path that looks like it stays inside the working directory can still
+// escape it through a symlink.
+func TestRenderVideo_symlinkedScriptOutsideWorkDirIsRefused(t *testing.T) {
+	e := newEnv(t)
+	outside := filepath.Join(t.TempDir(), "other.yaml")
+	if err := os.WriteFile(outside, []byte(validScript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(e.work, "demos", "evil.yaml")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+
+	res := e.call(t, "render_video", map[string]any{"script": "demos/evil.yaml"})
+	want := "script must stay inside the working directory: demos/evil.yaml"
+	if !res.IsError || text(res) != want {
+		t.Errorf("symlinked script: %v %q, want error %q", res.IsError, text(res), want)
+	}
+}
+
 // Decision 63: a card image that is missing or outside the working directory
 // is refused at submit time, with its pointer and no job row (FR-002).
 func TestRenderVideo_cardImageProblemsAreRefusedBeforeAJob(t *testing.T) {

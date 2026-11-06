@@ -4,61 +4,42 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
-
-	playwright "github.com/mxschmitt/playwright-go"
+	"os/exec"
+	"path/filepath"
 )
 
-// browsersPathEnv is where the driver looks for browsers; launch reads it from
-// the process environment, so wire sets it too (decision 77).
-const browsersPathEnv = "PLAYWRIGHT_BROWSERS_PATH"
-
-// Installer installs the Playwright driver and Chromium (`screencaster setup`).
-// It implements setup.Browser.
+// Installer runs the installed Playwright driver for `screencaster setup`. It
+// implements setup.Browser. It downloads nothing: the driver, Chromium and
+// ffmpeg are fetched by setup from pinned, sha256-checked files, and the
+// library's own installer is never used (decision 82).
 type Installer struct{}
 
-// Install downloads the driver into driverDir and Chromium into browsersDir in
-// one playwright.Install call. RunOptions used: DriverDirectory, Browsers
-// ["chromium"], WithDeps (maps to `--with-deps`, apt only), Stdout, Stderr and
-// Logger, all pointed at out, so nothing reaches the process's own stdout.
+// InstallDeps runs the driver's `install-deps chromium` with a fixed argument
+// list: Chromium's system libraries through apt (needs root and apt; setup
+// calls it only when apt is on PATH). The command line is
+// `<driverDir>/node <driverDir>/package/cli.js install-deps chromium`, with
+// output to out so nothing reaches the process's own stdout.
 //
-// It reads the environment the library documents: PLAYWRIGHT_NODEJS_PATH (use
-// an installed Node.js instead of downloading one), NODE_MIRROR and
-// PLAYWRIGHT_GO_NPM_REGISTRY (mirrors). browsersDir is passed to the driver as
-// PLAYWRIGHT_BROWSERS_PATH for the duration of the call.
-//
-// playwright.Install takes no context, so ctx is checked only before it
-// starts; an interrupt during the download ends the process instead.
-//
-// It needs the network and is not unit-tested; the native run in the setup
-// plan (CP6) is its check.
-func (Installer) Install(ctx context.Context, driverDir, browsersDir string, withDeps bool, out io.Writer) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	prev, had := os.LookupEnv(browsersPathEnv)
-	if err := os.Setenv(browsersPathEnv, browsersDir); err != nil {
-		return err
-	}
-	defer func() {
-		if had {
-			_ = os.Setenv(browsersPathEnv, prev)
-		} else {
-			_ = os.Unsetenv(browsersPathEnv)
-		}
-	}()
-	err := playwright.Install(&playwright.RunOptions{
-		DriverDirectory: driverDir,
-		Browsers:        []string{"chromium"},
-		WithDeps:        withDeps,
-		Verbose:         true,
-		Stdout:          out,
-		Stderr:          out,
-		Logger:          slog.New(slog.NewTextHandler(out, nil)),
-	})
-	if err != nil {
-		return fmt.Errorf("playwright install: %w", err)
+// It changes the system and is not unit-tested beyond its argument list
+// (install_test.go); the native run in the manual pre-release check is its
+// test (ARCHITECTURE §13).
+func (Installer) InstallDeps(ctx context.Context, driverDir string, out io.Writer) error {
+	node := filepath.Join(driverDir, "node")
+	cli := filepath.Join(driverDir, "package", "cli.js")
+	env := []string{"DEBIAN_FRONTEND=noninteractive"}
+	if err := run(ctx, out, env, node, cli, "install-deps", "chromium"); err != nil {
+		return fmt.Errorf("playwright install-deps chromium: %w", err)
 	}
 	return nil
+}
+
+// run starts a command with extra environment variables; a package variable
+// so the unit test checks the argument list without running the driver.
+var run = func(ctx context.Context, out io.Writer, env []string, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdout = out
+	cmd.Stderr = out
+	return cmd.Run()
 }

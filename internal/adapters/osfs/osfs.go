@@ -20,6 +20,8 @@ func (FS) Open(name string) (io.ReadCloser, error) { return os.Open(name) }
 
 func (FS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
 
+func (FS) EvalSymlinks(name string) (string, error) { return filepath.EvalSymlinks(name) }
+
 // CreateExcl opens name with O_EXCL, so an existing file is never written
 // (BR-006).
 func (FS) CreateExcl(name string) (io.WriteCloser, error) {
