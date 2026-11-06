@@ -10,7 +10,7 @@ require (
 	github.com/mxschmitt/playwright-go v0.6201.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/text v0.14.0
+	golang.org/x/text v0.41.0
 	modernc.org/sqlite v1.50.0
 )
 

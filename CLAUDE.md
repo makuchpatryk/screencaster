@@ -13,6 +13,7 @@ Examples:
 
 - **Short description:** a few lines, as short as possible; no long summaries or test checklists
 - **No co-author line** and no generated-by footer
+- **Connect issue:** include "Closes #X" in the `--body` on `gh pr create`, not after (hook blocks `gh pr edit`). GitHub auto-links and closes on merge.
 
 ## Skills
 
