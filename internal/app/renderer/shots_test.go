@@ -115,6 +115,23 @@ func TestPrepare_screenshotsRejectALanguageOverride(t *testing.T) { // decision 
 	}
 }
 
+func TestPrepare_screenshotsRejectASubtitlesOverride(t *testing.T) { // FR-021
+	dir, files := workDir(shotsScript)
+	req := request(dir)
+	on := true
+	req.Subtitles = &on
+
+	_, err := Prepare(req, stock, files)
+	var ve failure.ValidationErrors
+	if !errors.As(err, &ve) {
+		t.Fatalf("Prepare() error = %v, want ValidationErrors", err)
+	}
+	want := failure.ValidationErrors{{Pointer: "/subtitles", Message: "subtitles are not used by a screenshots script"}}
+	if !reflect.DeepEqual(ve, want) {
+		t.Errorf("errors = %v, want %v", ve, want)
+	}
+}
+
 func TestPrepare_screenshotsKeepTheOutputDirCheck(t *testing.T) {
 	dir, files := workDir(strings.Replace(shotsScript, "type: screenshots\n", "type: screenshots\noutputDir: ../../elsewhere\n", 1))
 

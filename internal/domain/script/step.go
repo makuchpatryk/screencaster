@@ -10,8 +10,9 @@ import (
 // Step is one action plus optional narration keyed by language code. In
 // YAML the action is the step's key: `- click: "#save"` (decision 70).
 type Step struct {
-	Action    Action
-	Narration map[string]string
+	Action      Action
+	Narration   map[string]string
+	NoSubtitles bool // `subtitles: false` hides this step's cue; narration is still spoken (FR-021)
 }
 
 // Action is what a step does. Name is the script key (goto, click, ...);
@@ -124,6 +125,16 @@ func (s *Step) UnmarshalJSON(data []byte) error {
 			if err := json.Unmarshal(raw, &s.Narration); err != nil {
 				return fmt.Errorf("narration: %w", err)
 			}
+			continue
+		}
+		if k == "subtitles" {
+			// The schema allows only `const: false` here; a true decode error
+			// only guards a caller that skipped schema validation.
+			var off bool
+			if err := json.Unmarshal(raw, &off); err != nil {
+				return fmt.Errorf("subtitles: %w", err)
+			}
+			s.NoSubtitles = !off // the only allowed value is false, i.e. hide the cue
 			continue
 		}
 		if s.Action != nil {
@@ -243,6 +254,9 @@ func (s Step) MarshalJSON() ([]byte, error) {
 	m := map[string]any{s.Action.Name(): v}
 	if s.Narration != nil {
 		m["narration"] = s.Narration
+	}
+	if s.NoSubtitles {
+		m["subtitles"] = false
 	}
 	return json.Marshal(m)
 }

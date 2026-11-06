@@ -72,6 +72,7 @@ func assembleInput(r renderer.AssembleRequest) assembler.Input {
 		Webm:    r.Video,
 		Intro:   still(r.Intro),
 		Outro:   still(r.Outro),
+		Subs:    subs(r.Subs),
 		Title:   r.Title,
 		Comment: r.Comment,
 		Out:     r.Out,
@@ -80,6 +81,14 @@ func assembleInput(r renderer.AssembleRequest) assembler.Input {
 		in.Clips = append(in.Clips, assembler.Clip{Path: c.Path, Offset: c.Offset})
 	}
 	return in
+}
+
+// subs maps the subtitle track; nil (no track) stays nil (FR-021).
+func subs(s *renderer.SubsTrack) *assembler.Subs {
+	if s == nil {
+		return nil
+	}
+	return &assembler.Subs{Path: s.Path, Lang: s.Lang}
 }
 
 // still maps a card picture; nil (card off) stays nil.

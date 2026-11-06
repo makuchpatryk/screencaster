@@ -53,6 +53,10 @@
       "description": "Card shown after the recording. Omit or false for none; true or {} for the built-in card (closing line and title); an object to change its text, image or time.",
       "$ref": "#/$defs/bookend"
     },
+    "subtitles": {
+      "description": "Soft mov_text subtitle track, one cue per narrated step, timed on its narration. Omit or false for none; true or {} for the built-in style (ffmpeg's own SRT defaults); an object to set font, size, color or background. A step can hide its own cue with subtitles: false.",
+      "$ref": "#/$defs/subtitlesOpt"
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -80,6 +84,20 @@
           { "not": { "required": ["image", "title"] } },
           { "not": { "required": ["image", "subtitle"] } }
         ]
+      },
+      "else": { "type": "boolean" }
+    },
+    "subtitlesOpt": {
+      "description": "Subtitle track: false for none, true for the built-in style (ffmpeg's own SRT defaults), or an object to set font, size, color or background.",
+      "if": { "type": "object" },
+      "then": {
+        "additionalProperties": false,
+        "properties": {
+          "font": { "description": "Font family name, e.g. Arial. Default ffmpeg's own.", "type": "string", "minLength": 1, "maxLength": 64 },
+          "size": { "description": "Font size in px. Default ffmpeg's own.", "type": "integer", "minimum": 8, "maximum": 120 },
+          "color": { "description": "Text colour. Default ffmpeg's own (white).", "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+          "background": { "description": "Box colour behind the text, with an optional alpha byte. Default ffmpeg's own (opaque black).", "type": "string", "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$" }
+        }
       },
       "else": { "type": "boolean" }
     },
@@ -194,6 +212,10 @@
           "propertyNames": { "$ref": "#/$defs/lang" },
           "additionalProperties": { "type": "string", "maxLength": 1000 }
         },
+        "subtitles": {
+          "const": false,
+          "description": "false hides this step's subtitle cue; narration is still spoken"
+        },
         "goto": {
           "description": "Absolute http(s) URL of the page to open, e.g. https://example.com/projects",
           "type": "string",
@@ -257,9 +279,13 @@
           }
         }
       },
-      "if": { "required": ["narration"] },
-      "then": { "minProperties": 2, "maxProperties": 2 },
-      "else": { "minProperties": 1, "maxProperties": 1 }
+      "if": { "required": ["narration", "subtitles"] },
+      "then": { "minProperties": 3, "maxProperties": 3 },
+      "else": {
+        "if": { "anyOf": [{ "required": ["narration"] }, { "required": ["subtitles"] }] },
+        "then": { "minProperties": 2, "maxProperties": 2 },
+        "else": { "minProperties": 1, "maxProperties": 1 }
+      }
     }
   }
 }

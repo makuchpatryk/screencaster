@@ -1,0 +1,11 @@
+# Soft subtitle track with every style field set.
+name: subtitles-styled
+subtitles:
+  font: Arial
+  size: 32
+  color: "#FFFFFF"
+  background: "#0000007F"
+steps:
+  - goto: http://host.docker.internal:3000/projects
+    narration:
+      en: Welcome to the projects page.

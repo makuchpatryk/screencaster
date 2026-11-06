@@ -61,6 +61,8 @@ Each piece of knowledge has one authoritative place. Two blocks that merely look
 | PNG names (`NN.png`, width by shot count) | `shooter.ShotName`; `renderer.shotFile` only recognizes them to remove stale ones |
 | Annotation drawing (box, arrow, label, dim) | `overlay.js` in `adapters/browser`; the markers' colour and placement live nowhere else |
 | Card text and the closing line per language | `domain/card` (`HTML`, `Outro`); the intro/outro text defaults come from `renderer.Prepare`; no card unless set (`renderer.resolveCard`) |
+| Subtitle language tag (ISO 639-1 → 639-2/T) | `domain/subtitle.Lang`, over `golang.org/x/text/language` (not a second hand-written table; `adapters/tts/piper.Defaults` already derives a language from the voice name, so a second table would be a second source of the same knowledge) |
+| ASS document and style | `domain/subtitle.ASS`, used by nothing else |
 | Path base of a demo (output folder, card images) | `renderer.Prepare`: the demo's folder, then the inside-the-work-dir check |
 | Render log wording | `app/renderer` (`Request.Log`); callers only choose where the lines go |
 | 30 s timeout, 25 cursor steps, 60 ms/char, 1920×1080, 30 fps | named constants in the owning package |
@@ -82,6 +84,7 @@ Layout: ARCHITECTURE §3.
 | `domain/script` | parse and validate input into typed values | start processes or touch the browser |
 | `domain/voices`, `domain/failure` | pure resolution and error types | do I/O, know a provider's file formats or carry JSON tags |
 | `domain/card` | build the card page and closing line from text | do I/O, start a process or pick the language to render |
+| `domain/subtitle` | build the ASS document and map a language to its ISO 639-2/T tag | do I/O, start a process or pick the language to render |
 | `domain/executor` | run one step | decide timing between steps or know about narration |
 | `domain/recorder` | run one language's steps, record offsets (BR-003) | publish files, pick output names or launch a browser itself |
 | `domain/shooter` | run a screenshots script's steps, name the PNGs, capture at `screenshot` steps | publish files or launch a browser itself |

@@ -352,3 +352,61 @@ INSERT INTO jobs (id, script_path, demo_name, languages, status, created_at)
 		_ = s.Close()
 	}
 }
+
+func TestQueue_subtitlesRoundTrips(t *testing.T) { // FR-021
+	s := openStore(t)
+	ctx := context.Background()
+	for _, want := range []bool{true, false} {
+		id := "sub-" + strconv.FormatBool(want)
+		if _, err := s.Insert(ctx, jobs.NewJob{
+			ID: id, ScriptPath: "demos/x.yaml", Script: []byte("x"), DemoName: "x", Languages: []string{"en"}, Subtitles: want,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		j, err := s.Get(ctx, id)
+		if err != nil || j.Subtitles != want {
+			t.Errorf("Get(%s).Subtitles = %v, want %v (err %v)", id, j.Subtitles, want, err)
+		}
+	}
+}
+
+// A jobs.db from before FR-021 gets the column on open; its rows read
+// Subtitles false, since they predate the feature.
+func TestOpen_addsSubtitlesColumnToAnOldDatabase(t *testing.T) { // FR-021
+	path := filepath.Join(t.TempDir(), "jobs.db")
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE jobs (
+  id TEXT PRIMARY KEY, script_path TEXT NOT NULL, demo_name TEXT NOT NULL, languages TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
+  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, outputs_json TEXT, error_json TEXT, script TEXT);
+INSERT INTO jobs (id, script_path, demo_name, languages, status, created_at, script)
+  VALUES ('old', 'demos/a.yaml', 'a', '["en"]', 'succeeded', '2026-10-03T10:15:00.000000000Z', 'name: a');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path, func() time.Time { return instant })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+
+	j, err := s.Get(context.Background(), "old")
+	if err != nil || j.Subtitles {
+		t.Errorf("old row = %+v, %v; want Subtitles false (predates the feature)", j, err)
+	}
+	if _, err := s.Insert(context.Background(), jobs.NewJob{
+		ID: "new", ScriptPath: "demos/b.yaml", Script: []byte("x"), DemoName: "b", Languages: []string{"en"}, Subtitles: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(context.Background(), "new")
+	if err != nil || !got.Subtitles {
+		t.Errorf("new row = %+v, %v; want Subtitles true", got, err)
+	}
+}

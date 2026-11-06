@@ -93,6 +93,7 @@ func New(d Deps, version string) *mcp.Server {
 func renderDescription() string {
 	return "Queue a narrated demo video. `script` is the path of a YAML script relative to the project directory; " +
 		"`languages` (e.g. [\"en\",\"pl\"]) overrides the script's `languages` (default [\"en\"]). " +
+		"`subtitles` overrides the script's `subtitles` on/off. " +
 		"The script is validated now; on success the job is queued and its id and queue position are returned. " +
 		"Poll `get_render_status` with the id.\n\n" +
 		"Rules:\n" +
@@ -128,6 +129,7 @@ var scriptTools = map[string]string{
 type renderIn struct {
 	Script    string   `json:"script" jsonschema:"path of the YAML script relative to the project directory"`
 	Languages []string `json:"languages,omitempty" jsonschema:"language codes overriding the script's languages"`
+	Subtitles *bool    `json:"subtitles,omitempty" jsonschema:"overrides the script's subtitles on/off"`
 }
 
 type renderOut struct {
@@ -137,7 +139,7 @@ type renderOut struct {
 }
 
 func (h handlers) renderVideo(ctx context.Context, _ *mcp.CallToolRequest, in renderIn) (*mcp.CallToolResult, renderOut, error) {
-	out, err := h.enqueue(ctx, in.Script, in.Languages, script.TypeVideo)
+	out, err := h.enqueue(ctx, in.Script, in.Languages, in.Subtitles, script.TypeVideo)
 	return nil, out, err
 }
 
@@ -146,14 +148,14 @@ type shotsIn struct {
 }
 
 func (h handlers) takeScreenshots(ctx context.Context, _ *mcp.CallToolRequest, in shotsIn) (*mcp.CallToolResult, renderOut, error) {
-	out, err := h.enqueue(ctx, in.Script, nil, script.TypeScreenshots)
+	out, err := h.enqueue(ctx, in.Script, nil, nil, script.TypeScreenshots)
 	return nil, out, err
 }
 
 // enqueue validates the script now and queues a job for it, or fails with a
 // tool error and no job row (FR-012). kind is the script type the calling tool
 // takes; a script of the other type is refused with the tool to use instead.
-func (h handlers) enqueue(ctx context.Context, scriptPath string, languages []string, kind string) (renderOut, error) {
+func (h handlers) enqueue(ctx context.Context, scriptPath string, languages []string, subtitles *bool, kind string) (renderOut, error) {
 	// The tool input is LLM-written, so the script path is not trusted (decision 58).
 	path, err := renderer.ScriptPath(h.Files, h.WorkDir, scriptPath)
 	if err != nil {
@@ -175,7 +177,7 @@ func (h handlers) enqueue(ctx context.Context, scriptPath string, languages []st
 	if s, err := script.Parse(data); err == nil && s.Kind() != kind {
 		return renderOut{}, fmt.Errorf("script type is %s; use %s", s.Kind(), scriptTools[s.Kind()])
 	}
-	plan, err := renderer.Prepare(renderer.Request{WorkDir: h.WorkDir, ScriptPath: scriptPath, Script: data, LangOverride: languages}, installed, h.Files)
+	plan, err := renderer.Prepare(renderer.Request{WorkDir: h.WorkDir, ScriptPath: scriptPath, Script: data, LangOverride: languages, Subtitles: subtitles}, installed, h.Files)
 	if err != nil {
 		return renderOut{}, err
 	}
@@ -188,6 +190,9 @@ func (h handlers) enqueue(ctx context.Context, scriptPath string, languages []st
 	id := h.NewID()
 	pos, err := h.Store.Insert(ctx, jobs.NewJob{
 		ID: id, ScriptPath: scriptPath, Script: data, DemoName: plan.Script.Name, Languages: langs,
+		// Stores the resolved value, like Languages (FR-021): the worker
+		// replays it as the override on re-render.
+		Subtitles: plan.Subtitles != nil,
 	})
 	if err != nil {
 		return renderOut{}, err

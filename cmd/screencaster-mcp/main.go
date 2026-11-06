@@ -120,6 +120,9 @@ func renderJob(wd string, eng tts.Engine) jobs.RenderFunc {
 		}
 		return renderer.Render(ctx, deps, renderer.Request{
 			WorkDir: wd, ScriptPath: job.ScriptPath, Script: job.Script, LangOverride: job.Languages,
+			// The stored resolved value becomes the override on a worker
+			// re-render, exactly as job.Languages already does (FR-021).
+			Subtitles: &job.Subtitles,
 			// slog goes to stderr; stdout stays protocol-only (ARCHITECTURE §12).
 			Log: func(msg string) { slog.Info(msg, "job", job.ID) },
 		})

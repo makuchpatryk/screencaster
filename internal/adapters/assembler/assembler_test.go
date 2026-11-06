@@ -94,6 +94,42 @@ func TestBuildArgs_golden(t *testing.T) { // FR-009
 				[]string{strings.Join([]string{main, stillGraph(1, "outro"), "[main][outro]concat=n=2:v=1:a=0[v]"}, ";")},
 				fields("-map [v] -map 2:a -shortest "+enc+" -movflags +faststart out.mp4")),
 		},
+		{
+			name: "subtitle track: ass file is the last input, mov_text mapped after -c:a", // FR-021
+			in: Input{
+				Webm:  "rec.webm",
+				Clips: []Clip{{"c1.wav", 1234 * time.Millisecond}},
+				Subs:  &Subs{Path: "subs.ass", Lang: "eng"},
+				Out:   "out.mp4",
+			},
+			want: slices.Concat(fields(head+" -i c1.wav -i subs.ass -filter_complex"),
+				[]string{vid + ";[1:a]adelay=1234:all=1[a1];[a1]amix=inputs=1:normalize=0:dropout_transition=0[a]"},
+				fields("-map [v] -map [a] "+enc),
+				[]string{"-map", "2:s", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng", "-disposition:s:0", "default"},
+				fields("-movflags +faststart out.mp4")),
+		},
+		{
+			name: "subtitle track with intro: ass input index shifts past the still and clip",
+			in: Input{
+				Webm:  "rec.webm",
+				Clips: []Clip{{"c1.wav", 0}},
+				Intro: &Still{"intro.png", 3 * time.Second},
+				Subs:  &Subs{Path: "subs.ass", Lang: "pol"},
+				Out:   "out.mp4",
+			},
+			want: slices.Concat(fields(head+" -loop 1 -framerate 30 -t 3 -i intro.png -i c1.wav -i subs.ass -filter_complex"),
+				[]string{strings.Join([]string{main, stillGraph(1, "intro"), "[intro][main]concat=n=2:v=1:a=0[v]",
+					"[2:a]adelay=3000:all=1[a1]", "[a1]amix=inputs=1:normalize=0:dropout_transition=0[a]"}, ";")},
+				fields("-map [v] -map [a] "+enc),
+				[]string{"-map", "3:s", "-c:s", "mov_text", "-metadata:s:s:0", "language=pol", "-disposition:s:0", "default"},
+				fields("-movflags +faststart out.mp4")),
+		},
+		{
+			name: "no clips: Subs is ignored, no subtitle stream (ARCHITECTURE §4)",
+			in:   Input{Webm: "rec.webm", Subs: &Subs{Path: "subs.ass", Lang: "eng"}, Out: "out.mp4"},
+			want: fields(head + " -f lavfi -i anullsrc=r=22050:cl=mono -filter_complex " +
+				vid + " -map [v] -map 1:a -shortest " + enc + " -movflags +faststart out.mp4"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

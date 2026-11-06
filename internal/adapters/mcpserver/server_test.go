@@ -341,6 +341,34 @@ func TestRenderVideo_languagesOverrideIsResolvedAtSubmit(t *testing.T) {
 	}
 }
 
+func TestRenderVideo_subtitlesOverrideIsResolvedAndStored(t *testing.T) { // FR-021
+	e := newEnv(t)
+	e.writeFile("demos/ok.yaml", validScript)
+
+	out := decode[renderOut](t, e.call(t, "render_video", map[string]any{"script": "demos/ok.yaml", "subtitles": true}))
+	j, err := e.store.Get(context.Background(), out.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !j.Subtitles {
+		t.Errorf("Subtitles = %v, want true (override)", j.Subtitles)
+	}
+}
+
+func TestRenderVideo_subtitlesDefaultOffWhenNeitherSetsIt(t *testing.T) { // FR-021
+	e := newEnv(t)
+	e.writeFile("demos/ok.yaml", validScript) // no subtitles key
+
+	out := decode[renderOut](t, e.call(t, "render_video", map[string]any{"script": "demos/ok.yaml"}))
+	j, err := e.store.Get(context.Background(), out.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Subtitles {
+		t.Errorf("Subtitles = %v, want false (no override, no script key)", j.Subtitles)
+	}
+}
+
 // FR-012 AC2 and FR-013: a job is running, the next one waits at position 1.
 func TestRenderVideo_secondJobWhileRunningHasPositionOne(t *testing.T) {
 	e := newEnv(t)

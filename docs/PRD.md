@@ -150,6 +150,7 @@ None identified by user.
 - Docker image containing everything.
 - An optional start card and end card per video (off unless set; built in, the developer's own picture, or custom text).
 - Screenshots: a script with `type: screenshots` writes PNGs of the app (viewport, full page, one element or a clip, optionally annotated) instead of a video, and the MCP tool `take_screenshots` queues it (FR-020).
+- An optional soft `mov_text` subtitle track per video, one cue per narrated step, off unless set (FR-021).
 - Render log lines on stderr: start summary, one line per phase, end summary.
 
 ### 10.2 Post-MVP
@@ -163,6 +164,7 @@ None identified by user.
 - Formats other than 16:9 1920×1080 MP4 (no vertical, no square), apart from the PNG screenshots of FR-020 (decision 72); no other image format, size or scale.
 - Multi-audio-track MP4s; languages without a Piper voice; automatic translation by the tool itself (Claude writes the narration text).
 - Cloud TTS providers, voice cloning, human voiceover.
+- Subtitle burn-in, sidecar `.srt`/`.ass` files, subtitle cue position/outline/bold, per-step subtitle text override (FR-021 is soft `mov_text` only).
 - CI-triggered or automatic re-renders.
 - Web UI, user accounts, approval workflows.
 - Automatic deletion of outputs.
@@ -215,6 +217,7 @@ None identified by user.
   - `outputDir` (string, optional, relative to the demo file's folder and inside the working dir, default `output`, so the videos of `demos/x.yaml` land in `demos/output/`)
   - `intro`, `outro` (optional; omitted or `false` for no card, `true` or `{}` for the built-in card, or an object `{image?, title?, subtitle?, durationMs?}`; see FR-009). `image` is a path to a PNG or JPEG, relative to the demo file's folder and inside the working dir
   - `voices` (object, optional; keys are language codes, values are Piper voice names; built-in defaults: `en` → `en_US-ryan-high`, `pl` → `pl_PL-darkman-medium`)
+  - `subtitles` (optional; omitted or `false` for no soft subtitle track, `true` or `{}` for the built-in style, or an object `{font?, size?, color?, background?}`; see FR-021)
 - **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A `storageState` that is not an object of that shape (a path string, a cookie with neither `url` nor `domain` and `path`) → a schema validation error at `/storageState...`, reported together with the script and voice errors. An `outputDir` that resolves outside the working dir (`..` past it or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>`, because the script is written by an LLM; so is a script outside the working dir whose default `output` folder would be outside too. The same check follows a symlink: if `outputDir`, `intro`/`outro` `image`, or the screenshots folder resolves, through any in-path symlink, to somewhere outside the working directory, it is refused with the same message, before anything is written; a dangling symlink is refused the same way; a symlink that stays inside the working directory still works (security audit M3). An `intro` or `outro` `image` follows the same rule (`/intro/image: intro.image must stay inside the working directory: <value>`), must exist (`/intro/image: image not found: <absolute path>`) and must be a regular file with a `.png`, `.jpg` or `.jpeg` name whose first bytes are those of a PNG or JPEG (`/intro/image: image is not a PNG or JPEG: <absolute path>`); `image` together with `title` or `subtitle` and a `durationMs` outside 500–10000 are schema errors. All of it is checked before any browser or TTS work. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
 - **Acceptance criteria:**
   - Given a script without `baseUrl`, when any render starts, then it fails schema validation (`/baseUrl`) before launching a browser.
@@ -232,8 +235,9 @@ None identified by user.
   - `languages` (array, optional, lowercase ISO 639-1 codes such as `en`, `pl`, `de`; default `["en"]`; overridable per render, BR-002)
   - `voices` (object, optional, keys are language codes, values Piper voice names; installed check per BR-011)
   - `meta` (object, optional: `title` ≤ 120 chars, `description` ≤ 500 chars, `audience` one of `release-notes | sales | marketing`)
+  - `subtitles` (optional, shaped like `intro`/`outro`: omitted or `false` for none, `true` or `{}` for the built-in style, or an object `{font?, size?, color?, background?}`; see FR-021)
   - `steps` (array, required, 1–200 items)
-  - Each step (decision 70): exactly one action, written as the step's key, plus optional `narration`:
+  - Each step (decision 70): exactly one action, written as the step's key, plus optional `narration` and optional `subtitles`:
     - `goto: <url>` (string)
     - `click: <selector>`, `hover: <selector>`
     - `fill: { selector, value }`, `select: { selector, value }` (an empty `value` clears a field)
@@ -242,6 +246,7 @@ None identified by user.
     - `wait: <ms>` (integer 1–30000), or `wait: <selector>` (until visible)
     - `screenshot: true`, or `screenshot: { selector | fullPage | clip, annotate }` (screenshots scripts only, FR-020)
     - `narration` (optional object keyed by language code (`en`, `pl`, `de`, …), each a string ≤ 1000 chars, where an empty string keeps the step silent in that language; must contain an entry for every selected language; text for unselected languages is allowed and ignored; this cross-field rule is checked in code after schema validation)
+    - `subtitles: false` (optional; hides this step's subtitle cue only, narration is still spoken, FR-021)
     - Example: `- fill: { selector: "#email", value: demo@example.com }`
   - Selectors are Playwright selector strings (CSS, `role=`, `text=`).
 - **Edge cases:** Unknown fields → invalid. Empty `steps` → invalid. A step with no action or two actions → invalid. A step in the old flat form (`action: click`) → invalid, with one hint to use the action as the key.
@@ -316,13 +321,15 @@ None identified by user.
   3. mux them together;
   4. set the output duration to the video length;
   5. put a start card before the recording and an end card after it when the script sets `intro`/`outro` (decision 81), each shown for `durationMs` (default 3000 ms), scaled to fit 1920×1080 at 30 fps. The built-in card is an HTML page drawn by Chromium: the `intro` shows `meta.title` (or `name`) and `meta.description`, the `outro` shows a closing line in the language of the video (`en`: Thank you for watching, `pl`: Dziękujemy za uwagę, other languages: English) and the title. `title` and `subtitle` replace the text; `image` shows the picture instead, on a dark background where it does not fill the frame. Clip offsets are placed after the start card; the cards carry no narration;
-  6. write `meta.title` and `meta.description` as the MP4 `title` and `comment` tags when present.
+  6. write `meta.title` and `meta.description` as the MP4 `title` and `comment` tags when present;
+  7. when the script's resolved `subtitles` is on (FR-021), add one `mov_text` subtitle stream from the cues of that language, tagged with its ISO 639-2/T language code and flagged `default`.
 - **Edge cases:** ffmpeg exits non-zero → job fails with `assembly failed (<lang>): <stderr last 20 lines>`. The card page cannot be drawn → the job fails with `build cards (<lang>): <message>` before the recording starts.
 - **Acceptance criteria:**
   - Given a successful recording, when assembled, then `ffprobe` reports h264, 1920×1080, 30 fps, and an aac stream.
   - Given a script with no `intro` or `outro`, when rendered, then the video is the recording alone.
   - Given `intro: true` and `outro: true`, when rendered, then the video lasts the recording plus 6 s and its first and last 3 s are the built-in cards.
   - Given `intro: {image: assets/logo.png}` and `outro: false`, when rendered, then the first 3 s show that picture and the video ends with the recording.
+  - Given `subtitles: true` and a narrated language, when assembled, then `ffprobe` reports one `mov_text` stream with `tag:language` set and `disposition:default=1` (FR-021).
 
 ### FR-010: Output naming
 - **Implements:** BR-006, BR-007
@@ -332,14 +339,14 @@ None identified by user.
 
 ### FR-011: CLI
 - **Implements:** BP-003
-- **Description:** The `screencaster` binary must provide `screencaster render <script-path> [--lang en,pl]` (`--lang` overrides the script's `languages`), which runs FR-001…FR-010 synchronously without touching the job queue. Exit code 0 on success, 1 on any failure. It prints on stderr a start summary (script, languages, voices, step count, output dir), the step progress, one line per phase and language with its elapsed time (narration, cards, recording, assembly) and an end summary (output paths, video durations, total time); a failed render prints `render failed after <time>` and then the error once. The paths of the videos go to stdout. The MCP server writes the same lines to its stderr log with the job id. For a screenshots script (FR-020) the step progress has no `[lang]` prefix and stdout lists the PNG paths.
+- **Description:** The `screencaster` binary must provide `screencaster render <script-path> [--lang en,pl] [--subtitles | --subtitles=false]` (`--lang` overrides the script's `languages`; `--subtitles`/`--subtitles=false` overrides the script's `subtitles` on/off, FR-021), which runs FR-001…FR-010 synchronously without touching the job queue. Exit code 0 on success, 1 on any failure. It prints on stderr a start summary (script, languages, voices, step count, output dir), the step progress, one line per phase and language with its elapsed time (narration, cards, recording, assembly) and an end summary (output paths, video durations, total time); a failed render prints `render failed after <time>` and then the error once. The paths of the videos go to stdout. The MCP server writes the same lines to its stderr log with the job id. For a screenshots script (FR-020) the step progress has no `[lang]` prefix and stdout lists the PNG paths.
 - **Acceptance criteria:**
   - Given a valid script, when `screencaster render` runs, then it prints the output path(s) and exits 0.
 
 ### FR-012: MCP tool `render_video`
 - **Implements:** BP-001, BR-008
 - **Description:** The `screencaster-mcp` binary (stdio transport, official `modelcontextprotocol/go-sdk`) must expose `render_video`.
-  - **Input:** `{ "script": string, "languages"?: string[] }` (language codes); `script` is a path relative to the working dir (a path that resolves outside it → tool error `script must stay inside the working directory: <value>`), and `languages` overrides the script's `languages` (BR-002).
+  - **Input:** `{ "script": string, "languages"?: string[], "subtitles"?: boolean }`; `script` is a path relative to the working dir (a path that resolves outside it → tool error `script must stay inside the working directory: <value>`), `languages` overrides the script's `languages` (BR-002), and `subtitles` overrides the script's `subtitles` on/off (FR-021).
   - **Validation:** It must validate the script, its voices and its storageState (FR-001, FR-002) synchronously.
   - **On success:** It must insert a `queued` job and return `{ jobId, status: "queued", position }`.
   - **Tool description:** It must contain the full JSON Schema of the script format, an example script, and these rules: relative URLs only, narration text required for every selected language (`languages`, default `["en"]`), no login steps.
@@ -441,6 +448,18 @@ None identified by user.
   - Given a rerun with fewer shots, when it succeeds, then the extra numbered PNGs are gone and a `notes.txt` in the folder is untouched.
   - Given a `screenshot` step in a script without `type: screenshots`, when validating, then validation fails with a pointer to that step and no browser starts.
 
+### FR-021: Subtitles
+- **Implements:** BR-002, BR-004, BR-006, BR-010
+- **Description:** A video script must be able to add one soft `mov_text` subtitle track per MP4, one cue per narrated step, timed on the step's own narration offset so it can never drift from the audio or the start card (BR-003's offsets are the only timing source). The script's `subtitles` field (FR-001, FR-002) is off unless set, mirroring `intro`/`outro` (decision 81's pattern): omitted or `false` means no track; `true` or `{}` means the built-in style (ffmpeg's own SRT→`mov_text` defaults: a plain `font`/`size`/`color`/`background` field left unset keeps that default); an object sets one or more of `font`, `size`, `color`, `background`. A step's own `subtitles: false` hides only that step's cue; its narration is still spoken. The render-time override — CLI `--subtitles`/`--subtitles=false`, MCP `render_video`'s `subtitles?: boolean` — wins over the script's `subtitles`, the same BR-002 precedence `--lang`/`languages` uses over the script's `languages`. The resolved boolean (on or off) is what a queued job stores, so a server-restart re-render replays the same decision, not a raw override.
+- **Edge cases:** A `type: screenshots` script refuses `subtitles` in every form it could appear — the script key, a step's `subtitles: false`, the CLI flag, the MCP param — with a validation error at a JSON pointer, the same shape as its `--lang`/`languages` refusal. A language that ends up with zero cues (every narrated step hidden, un-narrated, or silent in that language) gets no subtitle stream and no error, only a render-log note; the render still succeeds. Only four style fields are exposed: `mov_text`'s `tx3g` sample description cannot carry cue position, outline or alignment, so those are not settable (not silently ignored: the schema has no such field).
+- **Acceptance criteria:**
+  - Given a script without `subtitles`, when rendered, then the ffmpeg argv and output bytes are unchanged from before this feature (backward compatibility).
+  - Given `subtitles: true` (or `{}`), when rendered, then each language's MP4 has one `mov_text` stream whose `tag:language` is that language's ISO 639-2/T code and whose `disposition:default` is `1`.
+  - Given a styled object (`font`, `size`, `color`, `background`), when rendered, then the `tx3g` sample description carries those values.
+  - Given a step with `subtitles: false`, when rendered, then that step has no cue and its narration audio is unaffected.
+  - Given `--subtitles=false` on a script whose own `subtitles` is `true`, when rendered, then no track is written; given `--subtitles` (bare) on a script with no `subtitles` key, then the built-in style is written.
+  - Given `subtitles` (script, step, `--subtitles` or MCP `subtitles`) on a `type: screenshots` script, when validating, then validation fails with a JSON pointer and no browser starts.
+
 # Part III — Technical
 
 ## 13. Data Model
@@ -452,6 +471,7 @@ None identified by user.
 | script_path | TEXT | yes | relative to working dir | |
 | demo_name | TEXT | yes | from script `name` | |
 | languages | TEXT | yes | JSON array of language codes | resolved per BR-002 |
+| subtitles | BOOLEAN | yes | | resolved per FR-021, like languages; default `false` |
 | status | TEXT | yes | `queued` \| `running` \| `succeeded` \| `failed` | |
 | created_at | TEXT | yes | RFC 3339 UTC | FIFO order key |
 | started_at | TEXT | no | RFC 3339 UTC | |
@@ -627,6 +647,7 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 84 | Working-directory path checks resolve symlinks before the containment check (MCP script path, `outputDir`, card images, screenshots folder); archive extraction does the same for a symlinked parent. Security audit M2/M3. See ARCHITECTURE.md §16 decision 84. | Refuse every symlink | User choice: keeps in-tree links working. |
 | 85 | `.screencaster/` and `jobs.db` get restrictive permissions, fail closed on a chmod error; a job's script snapshot is cleared once terminal. Security audit M4. See ARCHITECTURE.md §16 decision 85. | Strip cookies instead; warn instead of fail | User choice: keeps queued-job recovery working; no silent weak permissions. |
 | 86 | `release.yml` is gated to `main`, runs vet/tests first, and publishes `SHA256SUMS`; actions and base images are pinned by SHA/digest; the runtime image is non-root by default. Security audit M5/M6/M7/M8. See ARCHITECTURE.md §16 decision 86. | Build provenance attestations | Attestations are a larger, separate effort; out of scope here. |
+| 87 | Subtitles ship as one soft `mov_text` track per MP4, built from an ASS file (so ffmpeg's own SRT→mov_text converter carries the Default style's font, size, colour and background), not burned in; off unless the script sets `subtitles`, like `intro`/`outro` (decision 81) | Burn-in (`drawtext`/`subtitles` ffmpeg filters, needs libass or a bundled font); a sidecar `.srt`/`.ass` file; plain SRT with no style | Plays in any player that reads embedded tracks, with no new native or image dependency; matches issue #5's "ship as a soft track" option; a sidecar needs a second BR-006 naming concern and a player that reads it. |
 
 ## 21. Open Questions
 None.

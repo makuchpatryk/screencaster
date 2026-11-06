@@ -57,6 +57,9 @@ func TestParse_validSamples(t *testing.T) {
 		{"valid/cards-true.yaml", nil, 1},
 		{"valid/screenshots-areas.yaml", nil, 6},
 		{"valid/screenshots-annotate.yaml", nil, 4},
+		{"valid/subtitles-on.yaml", nil, 1},
+		{"valid/subtitles-styled.yaml", nil, 1},
+		{"valid/subtitles-step-off.yaml", nil, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -170,6 +173,46 @@ func TestParse_decodesBookends(t *testing.T) { // decisions 63, 81
 	}
 }
 
+func TestParse_decodesSubtitles(t *testing.T) { // FR-021
+	tests := []struct {
+		file string
+		want *Subtitles
+	}{
+		{"valid/default-langs.yaml", nil}, // no key: nil, which means no track
+		{"valid/subtitles-on.yaml", &Subtitles{}},
+		{"valid/subtitles-styled.yaml", &Subtitles{Font: "Arial", Size: 32, Color: "#FFFFFF", Background: "#0000007F"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			s, err := Parse(readSample(t, tt.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(s.Subtitles, tt.want) {
+				t.Errorf("Subtitles = %+v, want %+v", s.Subtitles, tt.want)
+			}
+		})
+	}
+}
+
+// A step's own `subtitles: false` hides its cue without touching its
+// narration (FR-021).
+func TestParse_decodesStepSubtitles(t *testing.T) {
+	s, err := Parse(readSample(t, "valid/subtitles-step-off.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Steps[0].NoSubtitles {
+		t.Error("step 0: NoSubtitles = true, want false")
+	}
+	if !s.Steps[1].NoSubtitles {
+		t.Error("step 1: NoSubtitles = false, want true (subtitles: false)")
+	}
+	if s.Steps[1].Narration["en"] == "" {
+		t.Error("step 1: narration should still be spoken when subtitles are hidden")
+	}
+}
+
 func TestParse_invalidSamples(t *testing.T) {
 	tests := []struct {
 		file        string
@@ -214,6 +257,10 @@ func TestParse_invalidSamples(t *testing.T) {
 		{"invalid/screenshot-annotate-no-selector.yaml", "/steps/0/screenshot/annotate", "selector"},
 		{"invalid/fullpage-on-click.yaml", "/steps/0/click", ""},
 		{"invalid/screenshot-type-unknown.yaml", "/type", ""},
+		{"invalid/subtitles-string.yaml", "/subtitles", ""},
+		{"invalid/subtitles-bad-color.yaml", "/subtitles/color", ""},
+		{"invalid/screenshots-subtitles.yaml", "/subtitles", "subtitles is not allowed in a screenshots script"},
+		{"invalid/subtitles-step-true.yaml", "/steps/0/subtitles", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -255,6 +302,7 @@ func TestParse_oneRootCausePerBrokenStep(t *testing.T) {
 		{"invalid/screenshot-annotate-no-selector.yaml", "/steps/0/screenshot/annotate"},
 		{"invalid/fullpage-on-click.yaml", "/steps/0/click"},
 		{"invalid/screenshots-no-shot.yaml", "/steps"},
+		{"invalid/subtitles-step-true.yaml", "/steps/0/subtitles"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -374,6 +422,25 @@ func TestStep_jsonRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(back, s.Steps) {
 		t.Errorf("round trip =\n%+v\nwant\n%+v\n(json %s)", back, s.Steps, data)
+	}
+}
+
+func TestStep_subtitlesJSONRoundTrip(t *testing.T) { // FR-021
+	step := Step{Action: Click{Selector: "#a"}, NoSubtitles: true}
+	data, err := json.Marshal(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"click":"#a","subtitles":false}`
+	if string(data) != want {
+		t.Errorf("json = %s, want %s", data, want)
+	}
+	var back Step
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back, step) {
+		t.Errorf("round trip = %+v, want %+v", back, step)
 	}
 }
 
@@ -570,6 +637,7 @@ func TestParseSteps_appliesTheScriptRules(t *testing.T) {
 	}{
 		{"no steps", nil, ""},
 		{"click with selector", []string{`{"click": "#a"}`}, ""},
+		{"subtitles key accepted and ignored", []string{`{"click": "#a", "subtitles": false}`}, ""},
 		{"scroll to zero", []string{`{"scroll": {"y": 0}}`}, ""},
 		{"click without selector", []string{`{"goto": "http://x/"}`, `{"click": ""}`}, "/steps/1/click"},
 		{"relative goto", []string{`{"goto": "/p"}`}, "/steps/0/goto"},
@@ -717,14 +785,19 @@ func TestCheckType_rules(t *testing.T) {
 			failure.ValidationErrors{{Pointer: "/steps/0/narration", Message: "narration is not allowed in a screenshots script"}}},
 		{"screenshots, intro true", Script{Type: TypeScreenshots, Steps: []Step{shot}, Intro: &Bookend{}},
 			failure.ValidationErrors{{Pointer: "/intro", Message: "intro is not allowed in a screenshots script"}}},
+		{"screenshots, subtitles true", Script{Type: TypeScreenshots, Steps: []Step{shot}, Subtitles: &Subtitles{}},
+			failure.ValidationErrors{{Pointer: "/subtitles", Message: "subtitles is not allowed in a screenshots script"}}},
+		{"screenshots, step subtitles off", Script{Type: TypeScreenshots, Steps: []Step{{Action: Screenshot{}, NoSubtitles: true}}},
+			failure.ValidationErrors{{Pointer: "/steps/0/subtitles", Message: "subtitles is not allowed in a screenshots script"}}},
 		{"screenshots, every video field", Script{
 			Type: TypeScreenshots, Steps: []Step{shot},
-			Languages: []string{"en"}, Voices: map[string]string{"en": "v"}, Intro: &Bookend{Off: true}, Outro: &Bookend{},
+			Languages: []string{"en"}, Voices: map[string]string{"en": "v"}, Intro: &Bookend{Off: true}, Outro: &Bookend{}, Subtitles: &Subtitles{Off: true},
 		}, failure.ValidationErrors{
 			{Pointer: "/languages", Message: "languages is not allowed in a screenshots script"},
 			{Pointer: "/voices", Message: "voices is not allowed in a screenshots script"},
 			{Pointer: "/intro", Message: "intro is not allowed in a screenshots script"},
 			{Pointer: "/outro", Message: "outro is not allowed in a screenshots script"},
+			{Pointer: "/subtitles", Message: "subtitles is not allowed in a screenshots script"},
 		}},
 	}
 	for _, tt := range tests {

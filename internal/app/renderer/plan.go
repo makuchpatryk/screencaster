@@ -17,6 +17,7 @@ import (
 
 	"screencaster/internal/domain/failure"
 	"screencaster/internal/domain/script"
+	"screencaster/internal/domain/subtitle"
 	"screencaster/internal/domain/voices"
 )
 
@@ -37,8 +38,12 @@ type Request struct {
 	// ScriptPath still anchors the demo folder and names the script.
 	Script       []byte
 	LangOverride []string
-	Progress     Progress
-	Log          func(msg string)
+	// Subtitles, when set, overrides the script's subtitles on/off, the same
+	// nil-means-nothing-to-override shape as LangOverride (BR-002 pattern,
+	// FR-021).
+	Subtitles *bool
+	Progress  Progress
+	Log       func(msg string)
 }
 
 // Progress reports step i (1-based) of n for lang; target is the selector or
@@ -56,6 +61,8 @@ type Plan struct {
 	OutputDir string            // absolute
 	Intro     Card
 	Outro     Card
+	// Subtitles is nil when the track is off (FR-021).
+	Subtitles *subtitle.Style
 }
 
 // Card is a resolved start or end card. Off means none. Image, when not empty,
@@ -101,6 +108,9 @@ func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 		if len(req.LangOverride) > 0 {
 			errs = append(errs, failure.ValidationError{Pointer: "/languages", Message: "languages are not used by a screenshots script"})
 		}
+		if req.Subtitles != nil {
+			errs = append(errs, failure.ValidationError{Pointer: "/subtitles", Message: "subtitles are not used by a screenshots script"})
+		}
 	} else {
 		langs = script.Languages(req.LangOverride, s.Languages)
 		errs = script.Validate(s, langs)
@@ -122,6 +132,7 @@ func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 	}
 
 	var intro, outro Card
+	var subs *subtitle.Style
 	if !shots {
 		title, description := s.Name, ""
 		if m := s.Meta; m != nil {
@@ -132,6 +143,7 @@ func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 		outro, outroErrs = resolveCard(files, "outro", s.Outro, Card{Subtitle: title}, demoDir, req.WorkDir)
 		errs = append(errs, introErrs...)
 		errs = append(errs, outroErrs...)
+		subs = resolveSubtitles(req.Subtitles, s.Subtitles)
 	}
 	if len(errs) > 0 {
 		return Plan{}, errs
@@ -146,7 +158,27 @@ func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 		OutputDir: outputDir,
 		Intro:     intro,
 		Outro:     outro,
+		Subtitles: subs,
 	}, nil
+}
+
+// resolveSubtitles turns the script's subtitles field and a render-time
+// override into the style to use, nil for off (FR-021, the BR-002 override
+// pattern): override false always wins to off; override true turns the track
+// on, with the script's own style when it set one (even off) else ffmpeg's
+// defaults (subtitle.Style{}); with no override, the script alone decides.
+func resolveSubtitles(override *bool, s *script.Subtitles) *subtitle.Style {
+	on := s != nil && !s.Off
+	if override != nil {
+		on = *override
+	}
+	if !on {
+		return nil
+	}
+	if s == nil || s.Off {
+		return &subtitle.Style{}
+	}
+	return &subtitle.Style{Font: s.Font, Size: s.Size, Color: s.Color, Background: s.Background}
 }
 
 // ReadScript reads the script at path, with the message a missing file gets

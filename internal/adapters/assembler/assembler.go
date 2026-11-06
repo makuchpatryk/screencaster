@@ -57,15 +57,26 @@ type Still struct {
 	Duration time.Duration
 }
 
+// Subs is one language's subtitle track: an ASS file whose Default style
+// ffmpeg's own mov_text converter carries into the track, and the ISO
+// 639-2/T tag to store it under (FR-021).
+type Subs struct {
+	Path string
+	Lang string
+}
+
 // Input is one language's assembly. Intro and Outro, when not nil, are stills
 // placed before and after the recording; clip offsets are relative to the
-// recording and the assembler shifts them by the intro. Title and Comment
-// become MP4 tags when not empty (FR-009.5). Out must not exist yet.
+// recording and the assembler shifts them by the intro. Subs, when not nil
+// and there are narration clips, adds a soft mov_text subtitle stream
+// (FR-021). Title and Comment become MP4 tags when not empty (FR-009.5). Out
+// must not exist yet.
 type Input struct {
 	Webm    string
 	Clips   []Clip
 	Intro   *Still
 	Outro   *Still
+	Subs    *Subs
 	Title   string
 	Comment string
 	Out     string
@@ -185,6 +196,9 @@ func isMarker(r, g, b byte) bool {
 //     (found in M3).
 //   - With no narrated step a silent source stands in, cut by -shortest, so
 //     every output has an aac stream (NFR-002).
+//   - When there are clips and Subs is set, the ASS file is the last input;
+//     it is muxed as a mov_text stream, tagged with its language and flagged
+//     default (FR-021).
 func buildArgs(in Input, cut time.Duration) []string {
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-ss", seconds(cut), "-i", in.Webm}
 	next := 1 // index of the next -i
@@ -212,6 +226,7 @@ func buildArgs(in Input, cut time.Duration) []string {
 	}
 
 	var audio []string
+	subsIdx := -1 // >= 0 once the subs input is added
 	if len(in.Clips) == 0 {
 		args = append(args, "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono")
 		audio = []string{"-map", fmt.Sprintf("%d:a", next), "-shortest"}
@@ -229,6 +244,12 @@ func buildArgs(in Input, cut time.Duration) []string {
 		fmt.Fprintf(&mix, "amix=inputs=%d:normalize=0:dropout_transition=0[a]", len(in.Clips))
 		graph = append(graph, mix.String())
 		audio = []string{"-map", "[a]"}
+		// A subtitle track needs a narration clip to time itself on; the
+		// renderer never sets Subs without clips either (ARCHITECTURE §4).
+		if in.Subs != nil {
+			subsIdx = next + len(in.Clips)
+			args = append(args, "-i", in.Subs.Path)
+		}
 	}
 
 	args = append(args, "-filter_complex", strings.Join(graph, ";"), "-map", "[v]")
@@ -237,6 +258,10 @@ func buildArgs(in Input, cut time.Duration) []string {
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
 		"-c:a", "aac", "-b:a", "160k",
 	)
+	if subsIdx >= 0 {
+		args = append(args, "-map", fmt.Sprintf("%d:s", subsIdx), "-c:s", "mov_text",
+			"-metadata:s:s:0", "language="+in.Subs.Lang, "-disposition:s:0", "default")
+	}
 	if in.Title != "" {
 		args = append(args, "-metadata", "title="+in.Title)
 	}

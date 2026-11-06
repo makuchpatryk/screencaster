@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"screencaster/internal/domain/failure"
+	"screencaster/internal/domain/subtitle"
 	"screencaster/internal/domain/voices"
 )
 
@@ -400,6 +401,42 @@ func TestPrepare_cards(t *testing.T) { // decisions 63, 81
 			}
 			if plan.Intro != tt.wantIntro || plan.Outro != tt.wantOutro {
 				t.Errorf("cards = %+v, %+v; want %+v, %+v", plan.Intro, plan.Outro, tt.wantIntro, tt.wantOutro)
+			}
+		})
+	}
+}
+
+// ptrBool is a small helper: Request.Subtitles needs a *bool to distinguish
+// "override to false" from "no override" (nil).
+func ptrBool(b bool) *bool { return &b }
+
+func TestPrepare_subtitles(t *testing.T) { // FR-021
+	tests := []struct {
+		name     string
+		extra    string
+		override *bool
+		want     *subtitle.Style
+	}{
+		{"omitted: off", "", nil, nil},
+		{"true: built-in style", "subtitles: true\n", nil, &subtitle.Style{}},
+		{"object: style fields copied", "subtitles:\n  font: Arial\n  size: 32\n  color: \"#FFFFFF\"\n  background: \"#0000007F\"\n", nil,
+			&subtitle.Style{Font: "Arial", Size: 32, Color: "#FFFFFF", Background: "#0000007F"}},
+		{"false: off", "subtitles: false\n", nil, nil},
+		{"no override, script off: off", "subtitles: false\n", nil, nil},
+		{"override false beats script true (BR-002 pattern)", "subtitles: true\n", ptrBool(false), nil},
+		{"override true beats script false, no style block", "subtitles: false\n", ptrBool(true), &subtitle.Style{}},
+		{"override true with no script block at all", "", ptrBool(true), &subtitle.Style{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, files := workDir(withTarget(tt.extra))
+			req := Request{WorkDir: dir, ScriptPath: "demos/demo.yaml", Subtitles: tt.override}
+			plan, err := Prepare(req, stock, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(plan.Subtitles, tt.want) {
+				t.Errorf("Subtitles = %+v, want %+v", plan.Subtitles, tt.want)
 			}
 		})
 	}
