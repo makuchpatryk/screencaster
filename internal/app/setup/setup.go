@@ -19,22 +19,39 @@ import (
 )
 
 // Fetcher downloads and unpacks. Fetch verifies sha256 (hex) before dst
-// exists; Extract unpacks a tar.gz into dstDir, overwriting what is there.
+// exists; Extract unpacks a tar.gz and ExtractZip a zip into dstDir,
+// overwriting what is there; ExtractFile unpacks one named tar.gz entry to the
+// file dst with the given permission bits.
 type Fetcher interface {
 	Fetch(ctx context.Context, url, dst, sha256 string) error
 	Extract(ctx context.Context, tgz, dstDir string) error
+	ExtractZip(ctx context.Context, zipPath, dstDir string) error
+	ExtractFile(ctx context.Context, tgz, entry, dst string, mode fs.FileMode) error
 }
 
-// Browser installs the Playwright driver and Chromium. One call does both, as
-// playwright.Install does; withDeps adds Chromium's system libraries (apt).
+// Browser runs the installed driver for what only it knows: InstallDeps is its
+// `install-deps chromium` (Chromium's system libraries through apt). The driver
+// and the browsers themselves are fetched by setup from pinned files, never by
+// the driver or playwright-go (decision 82).
 type Browser interface {
-	Install(ctx context.Context, driverDir, browsersDir string, withDeps bool, out io.Writer) error
+	InstallDeps(ctx context.Context, driverDir string, out io.Writer) error
 }
 
 // Packages is the system package manager (apt) for ffmpeg.
 type Packages interface {
 	HasApt() bool
 	InstallFFmpeg(ctx context.Context, out io.Writer) error
+}
+
+// Sandbox installs and inspects the AppArmor profile Chromium's userns
+// sandbox needs when the kernel restricts unprivileged user namespaces
+// (decision 83, Ubuntu 24.04+). Native only: in Docker the seccomp profile
+// covers the sandbox instead, and Restricted reports false in a container
+// that does not set the sysctl.
+type Sandbox interface {
+	Restricted() (bool, error)
+	Loaded(name string) bool
+	Install(ctx context.Context, chromePath string, out io.Writer) error
 }
 
 // Files is the file system the checks and the marker touch.
@@ -65,6 +82,7 @@ type Deps struct {
 	Packages Packages
 	Files    Files
 	Host     Host
+	Sandbox  Sandbox
 }
 
 // Options select the install. Dir is the install dir. Pins say what to
@@ -93,8 +111,16 @@ const (
 	PieceDriver   = "driver"
 	PieceFFmpeg   = "ffmpeg"
 	PiecePiper    = "piper"
+	PieceSandbox  = "sandbox"
 	PieceVoices   = "voices"
 )
+
+// SandboxProfileName is the fixed AppArmor profile name setup installs and
+// checks. It must equal adapters/apparmor.ProfileName: setup must not import
+// an adapter (depguard), so the two are duplicated and guarded by
+// internal/app/wire's tests, the pattern this repo uses for every
+// cross-boundary pin (Playwright, Piper).
+const SandboxProfileName = "screencaster-chromium"
 
 // PieceStatus is one line of the report.
 type PieceStatus struct {
@@ -148,8 +174,33 @@ const (
 	supportedArch = "amd64" // Piper is pinned to linux x86_64
 	ffprobe       = "ffprobe"
 	ffmpeg        = "ffmpeg"
-	chromiumDir   = "chromium-"
+
+	// Markers the Playwright driver and installer use in a browser folder.
+	installComplete = "INSTALLATION_COMPLETE"
+	depsValidated   = "DEPENDENCIES_VALIDATED"
 )
+
+// browserDirs are the folders under BrowsersDir the pinned revisions install
+// into, with the same names Playwright gives them: Chromium, its headless shell
+// (what a headless launch runs) and Playwright's ffmpeg (video recording).
+func browserDirs(browsersDir string, p Pins) (chromium, shell, ffmpeg string) {
+	return filepath.Join(browsersDir, "chromium-"+p.ChromiumRevision),
+		filepath.Join(browsersDir, "chromium_headless_shell-"+p.ChromiumRevision),
+		filepath.Join(browsersDir, "ffmpeg-"+p.FFmpegRevision)
+}
+
+// chromiumExecutable is the Chromium binary playwright-go launches, inside
+// the pinned revision's own folder (step 1: the Chrome for Testing zip's
+// chrome-linux64/chrome). AppArmor's userns profile is keyed to this exact
+// path.
+func chromiumExecutable(browsersDir string, p Pins) string {
+	chromium, _, _ := browserDirs(browsersDir, p)
+	return filepath.Join(chromium, "chrome-linux64", "chrome")
+}
+
+// browserTag is what the marker records for the driver and the browsers: the
+// release (so a new release reinstalls) and every pinned Playwright file.
+func browserTag(o Options) string { return o.Version + "/" + o.Pins.playwrightTag() }
 
 // marker records what setup installed: piece -> tag. It is not trusted alone;
 // Check also looks for the files.
@@ -228,18 +279,22 @@ func check(ctx context.Context, d Deps, o Options) (state, error) {
 	if err != nil {
 		return state{}, err
 	}
-	driver, err := checkDriver(d.Files, o.Dir, m, o.Version)
+	driver, err := checkDriver(d.Files, o.Dir, m, browserTag(o))
 	if err != nil {
 		return state{}, err
 	}
-	chromium, err := checkChromium(d.Files, o.Dir, m, o.Version)
+	chromium, err := checkChromium(d.Files, o.Dir, m, o)
 	if err != nil {
 		return state{}, err
 	}
 	if chromium.Status == StatusOK && !d.Packages.HasApt() {
 		chromium.Detail = "system libraries not checked on this distro"
 	}
-	st.report = Report{piper, voices, driver, chromium, checkFFmpeg(d.Host)}
+	sandbox, err := checkSandbox(d.Sandbox)
+	if err != nil {
+		return state{}, err
+	}
+	st.report = Report{piper, voices, driver, chromium, sandbox, checkFFmpeg(d.Host)}
 	st.badVoices = bad
 	return st, nil
 }
@@ -332,7 +387,7 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-func checkDriver(files Files, dir string, m marker, version string) (PieceStatus, error) {
+func checkDriver(files Files, dir string, m marker, tag string) (PieceStatus, error) {
 	for _, name := range []string{"node", "package"} {
 		ok, err := exists(files, filepath.Join(DriverDir(dir), name))
 		if err != nil {
@@ -342,30 +397,46 @@ func checkDriver(files Files, dir string, m marker, version string) (PieceStatus
 			return PieceStatus{PieceDriver, StatusMissing, filepath.Join(DriverDir(dir), name)}, nil
 		}
 	}
-	if !m.is(PieceDriver, version) {
+	if !m.is(PieceDriver, tag) {
 		return PieceStatus{PieceDriver, StatusBad, "not installed by this version"}, nil
 	}
 	return PieceStatus{Piece: PieceDriver, Status: StatusOK}, nil
 }
 
-func checkChromium(files Files, dir string, m marker, version string) (PieceStatus, error) {
-	entries, err := files.ReadDir(BrowsersDir(dir))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return PieceStatus{}, fmt.Errorf("read %s: %w", BrowsersDir(dir), err)
-	}
-	found := false
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), chromiumDir) {
-			found = true
+// checkChromium wants the install marker in each of the three browser folders
+// of the pinned revisions. The marker is written after a folder is fully
+// extracted, so a run that stopped half way reads as missing.
+func checkChromium(files Files, dir string, m marker, o Options) (PieceStatus, error) {
+	chromium, shell, ffmpegDir := browserDirs(BrowsersDir(dir), o.Pins)
+	for _, d := range []string{chromium, shell, ffmpegDir} {
+		ok, err := exists(files, filepath.Join(d, installComplete))
+		if err != nil {
+			return PieceStatus{}, err
+		}
+		if !ok {
+			return PieceStatus{PieceChromium, StatusMissing, d}, nil
 		}
 	}
-	switch {
-	case !found:
-		return PieceStatus{PieceChromium, StatusMissing, filepath.Join(BrowsersDir(dir), chromiumDir+"*")}, nil
-	case !m.is(PieceChromium, version):
+	if !m.is(PieceChromium, browserTag(o)) {
 		return PieceStatus{PieceChromium, StatusBad, "not installed by this version"}, nil
 	}
 	return PieceStatus{Piece: PieceChromium, Status: StatusOK}, nil
+}
+
+// checkSandbox reports ok when the kernel does not restrict unprivileged user
+// namespaces, or the AppArmor profile is already loaded; missing otherwise.
+func checkSandbox(sb Sandbox) (PieceStatus, error) {
+	restricted, err := sb.Restricted()
+	if err != nil {
+		return PieceStatus{}, fmt.Errorf("check AppArmor restriction: %w", err)
+	}
+	if !restricted || sb.Loaded(SandboxProfileName) {
+		return PieceStatus{Piece: PieceSandbox, Status: StatusOK}, nil
+	}
+	return PieceStatus{
+		PieceSandbox, StatusMissing,
+		"kernel restricts unprivileged user namespaces; AppArmor profile " + SandboxProfileName + " is not loaded",
+	}, nil
 }
 
 func checkFFmpeg(h Host) PieceStatus {
@@ -382,7 +453,7 @@ func checkFFmpeg(h Host) PieceStatus {
 }
 
 // Run checks, then installs each piece that is not ok, in order: piper,
-// voices, the browser (driver and Chromium in one call), ffmpeg. The marker is
+// voices, the browser (driver and Chromium in one pass), ffmpeg. The marker is
 // written after each success, so a rerun resumes at the piece that failed. It
 // refuses before any work when it is not root or the machine is not amd64.
 // The returned report is the state after the run.
@@ -445,6 +516,7 @@ func install(ctx context.Context, d Deps, o Options, st *state) error {
 		{PieceVoices, func() error { return installVoices(ctx, d, o, st) }},
 		{PieceDriver, func() error { return installBrowser(ctx, d, o, st) }},
 		{PieceChromium, func() error { return installBrowser(ctx, d, o, st) }},
+		{PieceSandbox, func() error { return installSandbox(ctx, d, o, st) }},
 		{PieceFFmpeg, func() error { return installFFmpeg(ctx, d, o, st) }},
 	}
 	for i, s := range steps {
@@ -505,26 +577,172 @@ func installVoices(ctx context.Context, d Deps, o Options, st *state) error {
 	return nil
 }
 
-// installBrowser serves both the driver and the chromium rows: one Install
-// covers both, so the second row finds itself already ok.
+// installBrowser serves both the driver and the chromium rows: it installs the
+// driver and every browser piece in one pass, so the second row finds itself
+// already ok. Every file comes from a pinned URL and is sha256-checked by Fetch
+// before anything is unpacked or run; nothing is downloaded by the driver
+// (decision 82).
 func installBrowser(ctx context.Context, d Deps, o Options, st *state) error {
 	if st.status(PieceDriver) == StatusOK && st.status(PieceChromium) == StatusOK {
 		return nil
 	}
+	if err := installDriver(ctx, d, o); err != nil {
+		return err
+	}
 	// System libraries need apt; elsewhere Chromium is installed without them
 	// and the README says what to add (decision 77).
-	withDeps := d.Packages.HasApt()
-	_, _ = fmt.Fprintln(o.Out, "driver, chromium: installing the Playwright driver and Chromium")
-	if err := d.Browser.Install(ctx, DriverDir(o.Dir), BrowsersDir(o.Dir), withDeps, o.Out); err != nil {
-		return fmt.Errorf("install playwright driver and chromium: %w", err)
+	depsOK := false
+	if d.Packages.HasApt() {
+		_, _ = fmt.Fprintln(o.Out, "chromium: installing system libraries (driver install-deps chromium)")
+		if err := d.Browser.InstallDeps(ctx, DriverDir(o.Dir), o.Out); err != nil {
+			return fmt.Errorf("install chromium system libraries: %w", err)
+		}
+		depsOK = true
 	}
-	st.marker[PieceDriver] = o.Version
-	st.marker[PieceChromium] = o.Version
+	if err := installBrowsers(ctx, d, o, depsOK); err != nil {
+		return err
+	}
+	tag := browserTag(o)
+	st.marker[PieceDriver] = tag
+	st.marker[PieceChromium] = tag
 	if err := writeMarker(d.Files, o.Dir, st.marker); err != nil {
 		return err
 	}
 	st.set(PieceDriver, StatusOK)
 	st.set(PieceChromium, StatusOK)
+	return nil
+}
+
+// fetchTemp downloads url to a file in the install dir and returns its path;
+// the caller removes it. Fetch keeps nothing at the path when the sha256
+// differs.
+func fetchTemp(ctx context.Context, d Deps, o Options, label, name, url, sha string) (string, error) {
+	_, _ = fmt.Fprintf(o.Out, "%s: downloading %s\n", label, url)
+	dst := filepath.Join(o.Dir, name)
+	if err := d.Fetch.Fetch(ctx, url, dst, sha); err != nil {
+		return "", fmt.Errorf("download %s (%s): %w", name, url, err)
+	}
+	return dst, nil
+}
+
+// installDriver puts the pinned Node.js at <driver>/node and the playwright-core
+// package at <driver>/package, then applies playwright-go's edits to it.
+func installDriver(ctx context.Context, d Deps, o Options) error {
+	p, dir := o.Pins, DriverDir(o.Dir)
+	node, err := fetchTemp(ctx, d, o, "driver", "node.tgz", p.NodeURL(), p.NodeSHA256)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Files.Remove(node) }()
+	if err := d.Files.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	if err := d.Fetch.ExtractFile(ctx, node, p.nodeArchiveDir()+"/bin/node", filepath.Join(dir, "node"), 0o755); err != nil {
+		return fmt.Errorf("unpack node: %w", err)
+	}
+	core, err := fetchTemp(ctx, d, o, "driver", "playwright-core.tgz", p.CoreURL(), p.CoreSHA256)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Files.Remove(core) }()
+	// The npm tarball's own top folder is package/, the layout the driver wants.
+	if err := d.Fetch.Extract(ctx, core, dir); err != nil {
+		return fmt.Errorf("unpack playwright-core: %w", err)
+	}
+	return patchDriver(d.Files, dir)
+}
+
+// coreBundleEdits are the three edits playwright-go v0.6201.1 makes to the
+// driver after it downloads it (run.go patchDriverBundle): a page error can
+// arrive without a location, which the unpatched bundle reads unguarded. Its
+// `Run` does not patch, so setup, which no longer calls its installer, must
+// (decision 82).
+var coreBundleEdits = []struct{ from, to string }{
+	{"pageError.location.url", `pageError.location?.url || ""`},
+	{"pageError.location.lineNumber", "pageError.location?.lineNumber || 0"},
+	{"pageError.location.columnNumber", "pageError.location?.columnNumber || 0"},
+}
+
+// patchDriver applies coreBundleEdits to <driverDir>/package/lib/coreBundle.js.
+// It fails when neither the original nor the patched text is there, since that
+// means the pinned playwright-core changed and the edits need a look.
+func patchDriver(files Files, driverDir string) error {
+	path := filepath.Join(driverDir, "package", "lib", "coreBundle.js")
+	b, err := files.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read driver bundle: %w", err)
+	}
+	text := string(b)
+	for _, e := range coreBundleEdits {
+		if !strings.Contains(text, e.from) && !strings.Contains(text, e.to) {
+			return fmt.Errorf("patch driver bundle %s: neither %q nor %q found", path, e.from, e.to)
+		}
+		text = strings.ReplaceAll(text, e.from, e.to)
+	}
+	if text == string(b) {
+		return nil
+	}
+	if err := files.WriteFile(path, []byte(text), 0o644); err != nil {
+		return fmt.Errorf("write driver bundle: %w", err)
+	}
+	return nil
+}
+
+// installBrowsers unpacks Chromium, its headless shell and Playwright's ffmpeg
+// into their revision folders. A folder's marker goes only after its extract
+// succeeds (and is removed first), so a half-unpacked folder never reads ok.
+// depsOK says install-deps succeeded, which is what the driver's own
+// DEPENDENCIES_VALIDATED marker records, so renders skip re-validating.
+func installBrowsers(ctx context.Context, d Deps, o Options, depsOK bool) error {
+	p := o.Pins
+	chromium, shell, ffmpegDir := browserDirs(BrowsersDir(o.Dir), p)
+	zips := []struct{ name, url, sha, dir string }{
+		{"chromium.zip", p.ChromiumURL(), p.ChromiumSHA256, chromium},
+		{"chromium-headless-shell.zip", p.HeadlessShellURL(), p.HeadlessShellSHA256, shell},
+		{"ffmpeg.zip", p.FFmpegURL(), p.FFmpegSHA256, ffmpegDir},
+	}
+	for _, z := range zips {
+		zp, err := fetchTemp(ctx, d, o, "chromium", z.name, z.url, z.sha)
+		if err != nil {
+			return err
+		}
+		err = unpackBrowser(ctx, d, zp, z.dir, depsOK)
+		_ = d.Files.Remove(zp)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func unpackBrowser(ctx context.Context, d Deps, zipPath, dir string, depsOK bool) error {
+	if err := d.Files.Remove(filepath.Join(dir, installComplete)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove marker in %s: %w", dir, err)
+	}
+	if err := d.Fetch.ExtractZip(ctx, zipPath, dir); err != nil {
+		return fmt.Errorf("unpack %s: %w", filepath.Base(zipPath), err)
+	}
+	if depsOK {
+		if err := d.Files.WriteFile(filepath.Join(dir, depsValidated), nil, 0o644); err != nil {
+			return fmt.Errorf("write marker in %s: %w", dir, err)
+		}
+	}
+	if err := d.Files.WriteFile(filepath.Join(dir, installComplete), nil, 0o644); err != nil {
+		return fmt.Errorf("write marker in %s: %w", dir, err)
+	}
+	return nil
+}
+
+// installSandbox writes and loads the AppArmor profile Chromium's userns
+// sandbox needs. install only calls it when checkSandbox found the piece
+// missing, so an unrestricted kernel or an already-loaded profile skip it.
+func installSandbox(ctx context.Context, d Deps, o Options, st *state) error {
+	path := chromiumExecutable(BrowsersDir(o.Dir), o.Pins)
+	_, _ = fmt.Fprintf(o.Out, "sandbox: installing the AppArmor profile for %s\n", path)
+	if err := d.Sandbox.Install(ctx, path, o.Out); err != nil {
+		return fmt.Errorf("install AppArmor profile: %w", err)
+	}
+	st.set(PieceSandbox, StatusOK)
 	return nil
 }
 

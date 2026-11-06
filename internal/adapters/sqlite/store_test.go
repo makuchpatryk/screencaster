@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,109 @@ func TestRemoveStaleTemp_keepsTmpWhileRenderRuns(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "stale-run", "en")); err != nil {
 		t.Errorf("running render's temp dir removed: %v", err)
+	}
+}
+
+// M4: a job's script (clear-text cookies included) is not kept past a
+// terminal status.
+func TestFinish_blanksScriptSnapshot(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	insert(t, s, "a")
+	if err := s.Start(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, "a", []renderer.Output{{Lang: "en", Path: "p"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Get(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Script != nil {
+		t.Errorf("Script = %q, want nil after Finish", j.Script)
+	}
+}
+
+// M4, same as Finish: a recovered (interrupted) job is terminal too.
+func TestRecover_blanksScriptSnapshot(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	insert(t, s, "running", "queued")
+	if err := s.Start(ctx, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"running", "queued"} {
+		j, err := s.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.Script != nil {
+			t.Errorf("%s: Script = %q, want nil after Recover", id, j.Script)
+		}
+	}
+}
+
+// M4: a jobs.db (and its state dir) left 0755/0644 by an older build, or by a
+// root container run, is secured on the next open.
+func TestOpen_securesStateDirAndDB(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, ".screencaster")
+	if err := os.Mkdir(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(stateDir, "jobs.db")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if st, err := os.Stat(stateDir); err != nil || st.Mode().Perm() != 0o700 {
+		t.Errorf("state dir: stat %v, mode %v, want 0700", err, st)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("jobs.db: stat %v, mode %v, want 0600", err, st)
+	}
+	// -wal/-shm appear once WAL mode is in effect; if they are there, they
+	// must be secured too.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if st, err := os.Stat(path + suffix); err == nil && st.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %v, want 0600", suffix, st.Mode().Perm())
+		}
+	}
+}
+
+// M4, fail closed: Open refuses rather than run with a state dir it could not
+// secure. Constructing "owned by another uid" (the real scenario: a root
+// container run's leftover) needs privilege separation this single process
+// does not have either way: as root, Chmod always succeeds regardless of
+// ownership, so the failure could never be observed; as this test's normal
+// user, the dir cannot be given to another owner to begin with. The test
+// still runs, and would catch a regression, wherever that separation exists.
+func TestOpen_failsWhenStateDirCannotBeSecured(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root always succeeds at chmod, so this cannot be made to fail")
+	}
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, ".screencaster")
+	if err := os.Mkdir(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(stateDir, 0, 0); err != nil {
+		t.Skip("cannot give the state dir to another owner in this environment")
+	}
+
+	_, err := Open(filepath.Join(stateDir, "jobs.db"), time.Now)
+	if err == nil || !strings.Contains(err.Error(), "secure "+stateDir) || !strings.Contains(err.Error(), "chown -R") {
+		t.Fatalf("Open() error = %v, want the secure/chown hint naming %s", err, stateDir)
 	}
 }
 

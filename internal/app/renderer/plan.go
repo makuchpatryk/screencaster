@@ -114,7 +114,7 @@ func Prepare(req Request, catalog voices.Catalog, files Files) (Plan, error) {
 	// an LLM, so every path it names must still stay inside the working
 	// directory (the mounted project).
 	demoDir := filepath.Dir(path)
-	outputDir, ok := within(req.WorkDir, resolve(demoDir, cmp.Or(s.OutputDir, defaultOutputDir)))
+	outputDir, ok := within(files, req.WorkDir, resolve(demoDir, cmp.Or(s.OutputDir, defaultOutputDir)))
 	if !ok {
 		// With no outputDir the folder is the default one next to the demo, so
 		// the message names it instead of an empty value.
@@ -186,7 +186,7 @@ func resolveCard(files Files, name string, b *script.Bookend, def Card, demoDir,
 	verr := func(msg string) failure.ValidationErrors {
 		return failure.ValidationErrors{{Pointer: "/" + name + "/image", Message: msg}}
 	}
-	abs, ok := within(workDir, resolve(demoDir, b.Image))
+	abs, ok := within(files, workDir, resolve(demoDir, b.Image))
 	if !ok {
 		return Card{}, verr(outsideWorkDir(name+".image", b.Image))
 	}
@@ -242,14 +242,60 @@ func resolve(workDir, p string) string {
 }
 
 // within resolves p against workDir and reports whether the result is workDir
-// or below it. Symlinks are not followed: the check is on the path text.
-func within(workDir, p string) (string, bool) {
+// or below it: first lexically (the message a failure here gets is
+// unchanged), then, since a script is written by an LLM and must not point
+// outside the working directory through a symlink either (M3), with every
+// symlink in workDir and in the deepest existing component of the target
+// resolved. A dangling symlink is refused; an in-tree one still works.
+func within(files Files, workDir, p string) (string, bool) {
 	abs := resolve(workDir, p)
 	rel, err := filepath.Rel(workDir, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return abs, false
 	}
+	root, err := deepestExisting(files, workDir)
+	if err != nil {
+		return abs, false
+	}
+	target, err := deepestExisting(files, abs)
+	if err != nil {
+		return abs, false
+	}
+	targetRel, err := filepath.Rel(root, target)
+	if err != nil || targetRel == ".." || strings.HasPrefix(targetRel, ".."+string(filepath.Separator)) {
+		return abs, false
+	}
 	return abs, true
+}
+
+// deepestExisting resolves the symlinks of the deepest prefix of p that
+// exists (Lstat, so a symlink counts as existing even if its own target does
+// not), then re-appends whatever tail is not there yet. A dangling symlink
+// among what does exist makes EvalSymlinks fail, which the caller treats as
+// outside the working directory.
+func deepestExisting(files Files, p string) (string, error) {
+	existing, tail := p, ""
+	for {
+		if _, err := files.Lstat(existing); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			break // reached the root without finding anything that exists
+		}
+		tail = filepath.Join(filepath.Base(existing), tail)
+		existing = parent
+	}
+	resolved, err := files.EvalSymlinks(existing)
+	if err != nil {
+		return "", err
+	}
+	if tail == "" {
+		return resolved, nil
+	}
+	return filepath.Join(resolved, tail), nil
 }
 
 func outsideWorkDir(field, value string) string {
@@ -260,8 +306,8 @@ func outsideWorkDir(field, value string) string {
 // so a render_video call cannot make the parser read, and quote in its errors,
 // files elsewhere in the container. The CLI does not use it: a developer may
 // name any script (Request.ScriptPath).
-func ScriptPath(workDir, p string) (string, error) {
-	abs, ok := within(workDir, p)
+func ScriptPath(files Files, workDir, p string) (string, error) {
+	abs, ok := within(files, workDir, p)
 	if !ok {
 		return "", errors.New(outsideWorkDir("script", p))
 	}

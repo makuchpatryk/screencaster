@@ -63,9 +63,15 @@ func (l *Lock) Release() error {
 	return l.f.Close() // closing the last fd drops the flock
 }
 
+// open creates the lock's dir 0700 (it holds jobs.db too, M4) and the lock
+// file itself 0644: it guards nothing secret, only an flock target.
 func open(path string) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("secure %s: %w (fix: chown -R $(id -u):$(id -g) .screencaster)", dir, err)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {

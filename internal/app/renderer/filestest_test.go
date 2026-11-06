@@ -6,11 +6,34 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"testing/fstest"
 )
+
+// osFiles is Files over the real OS file system, for the symlink tests
+// (fstest.MapFS has no real symlinks). It duplicates adapters/osfs.FS rather
+// than importing it: depguard forbids internal/app/** from importing an
+// adapter, tests included.
+type osFiles struct{}
+
+func (osFiles) ReadFile(name string) ([]byte, error)       { return os.ReadFile(name) }
+func (osFiles) Stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
+func (osFiles) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) }
+func (osFiles) Open(name string) (io.ReadCloser, error)    { return os.Open(name) }
+func (osFiles) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
+func (osFiles) EvalSymlinks(name string) (string, error)   { return filepath.EvalSymlinks(name) }
+
+func (osFiles) CreateExcl(name string) (io.WriteCloser, error) {
+	return os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+}
+
+func (osFiles) MkdirAll(name string, perm fs.FileMode) error { return os.MkdirAll(name, perm) }
+func (osFiles) Rename(oldname, newname string) error         { return os.Rename(oldname, newname) }
+func (osFiles) Remove(name string) error                     { return os.Remove(name) }
+func (osFiles) RemoveAll(name string) error                  { return os.RemoveAll(name) }
 
 // memFS is the Files fake: an fstest.MapFS that the write methods mutate.
 // Keys are absolute paths without the leading "/". The fake tools write their
@@ -86,6 +109,15 @@ func (f *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return fs.ReadDir(f.m, key(name))
+}
+
+// EvalSymlinks is the identity for a name that exists; memFS has no real
+// symlinks (those are tested on real temp dirs, not this fake).
+func (f *memFS) EvalSymlinks(name string) (string, error) {
+	if !f.exists(name) {
+		return "", pathErr("lstat", name, fs.ErrNotExist)
+	}
+	return name, nil
 }
 
 func (f *memFS) CreateExcl(name string) (io.WriteCloser, error) {

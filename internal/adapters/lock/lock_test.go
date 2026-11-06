@@ -63,6 +63,33 @@ func TestAcquire_waitsUntilReleased(t *testing.T) { // FR-014: worker waits
 	}
 }
 
+// M4: the lock's dir holds jobs.db too, so it is secured 0700; the lock file
+// itself guards nothing secret and stays 0644.
+func TestAcquire_createsPrivateDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".screencaster")
+	path := filepath.Join(dir, "render.lock")
+	l, err := TryAcquire(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := st.Mode().Perm(); perm != 0o700 {
+		t.Errorf("lock dir mode = %o, want 0700", perm)
+	}
+	st, err = os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := st.Mode().Perm(); perm != 0o644 {
+		t.Errorf("lock file mode = %o, want 0644", perm)
+	}
+}
+
 func TestAcquire_cancelStopsWaiting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "render.lock")
 	held, err := TryAcquire(path)

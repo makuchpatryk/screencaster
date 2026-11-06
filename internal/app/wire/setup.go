@@ -3,6 +3,7 @@ package wire
 import (
 	"os"
 
+	"screencaster/internal/adapters/apparmor"
 	"screencaster/internal/adapters/apt"
 	"screencaster/internal/adapters/browser"
 	"screencaster/internal/adapters/download"
@@ -36,6 +37,7 @@ func Setup() setup.Deps {
 		Packages: apt.Apt{},
 		Files:    osfs.FS{},
 		Host:     host.Host{},
+		Sandbox:  apparmor.AppArmor{},
 	}
 }
 

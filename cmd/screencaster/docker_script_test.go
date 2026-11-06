@@ -75,3 +75,48 @@ func TestDockerScript_isExecutable(t *testing.T) {
 		t.Errorf("mode %v, want an execute bit", st.Mode().Perm())
 	}
 }
+
+// Decision 83: the Chromium userns sandbox needs its seccomp profile; the
+// wrapper ships alone, so it is embedded rather than referenced by path.
+const seccompProfilePath = "../../scripts/seccomp-chromium.json"
+
+func TestDockerScript_passesTheSeccompProfile(t *testing.T) {
+	script := filledScript(t, "9.9.9")
+	tests := []struct{ name, want string }{
+		{"writes the profile to a temp file", `mktemp`},
+		{"cleans it up on exit", `trap cleanup EXIT`},
+		{"passes it to docker run", `--security-opt "seccomp=$seccomp_profile"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(script, tt.want) {
+				t.Errorf("script lacks %q", tt.want)
+			}
+		})
+	}
+}
+
+func TestDockerScript_embeddedProfileMatchesTheFile(t *testing.T) {
+	script := filledScript(t, "9.9.9")
+	want, err := os.ReadFile(seccompProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		start = "<<'SECCOMP_PROFILE_EOF'\n"
+		end   = "\nSECCOMP_PROFILE_EOF\n"
+	)
+	i := strings.Index(script, start)
+	if i < 0 {
+		t.Fatal("script has no SECCOMP_PROFILE_EOF heredoc")
+	}
+	i += len(start)
+	j := strings.Index(script[i:], end)
+	if j < 0 {
+		t.Fatal("heredoc never closes with SECCOMP_PROFILE_EOF")
+	}
+	got := script[i : i+j]
+	if got != string(want) {
+		t.Error("embedded profile is not byte-equal to scripts/seccomp-chromium.json")
+	}
+}

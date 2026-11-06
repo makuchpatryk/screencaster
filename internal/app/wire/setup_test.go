@@ -3,6 +3,9 @@ package wire
 import (
 	"os"
 	"testing"
+
+	"screencaster/internal/adapters/apparmor"
+	"screencaster/internal/app/setup"
 )
 
 func TestInstallDir(t *testing.T) {
@@ -34,12 +37,22 @@ func TestSetup_wiresEveryPort(t *testing.T) {
 	d := Setup()
 	ports := map[string]bool{
 		"Fetch": d.Fetch != nil, "Browser": d.Browser != nil, "Packages": d.Packages != nil,
-		"Files": d.Files != nil, "Host": d.Host != nil,
+		"Files": d.Files != nil, "Host": d.Host != nil, "Sandbox": d.Sandbox != nil,
 	}
 	for name, set := range ports {
 		if !set {
 			t.Errorf("setup.Deps.%s is not wired", name)
 		}
+	}
+}
+
+// setup.SandboxProfileName is duplicated from adapters/apparmor.ProfileName
+// because setup must not import an adapter (depguard); this is the only
+// place both can be imported together to guard them, the pattern this repo
+// uses for every cross-boundary pin.
+func TestSandboxProfileName_matchesTheApparmorAdapter(t *testing.T) {
+	if setup.SandboxProfileName != apparmor.ProfileName {
+		t.Errorf("setup.SandboxProfileName %q != apparmor.ProfileName %q", setup.SandboxProfileName, apparmor.ProfileName)
 	}
 }
 

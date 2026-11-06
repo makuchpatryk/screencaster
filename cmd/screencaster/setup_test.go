@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,11 +17,13 @@ import (
 // fakeTools records every call that would download or install, so a test can
 // assert none happened.
 type fakeTools struct {
-	calls []string
-	root  bool
-	arch  string
-	apt   bool
-	path  map[string]bool
+	calls      []string
+	root       bool
+	arch       string
+	apt        bool
+	path       map[string]bool
+	restricted bool // Sandbox.Restricted; false (unrestricted) by default
+	loaded     bool // Sandbox.Loaded, flips true after Install
 }
 
 func (f *fakeTools) Fetch(_ context.Context, url, _, _ string) error {
@@ -27,13 +31,31 @@ func (f *fakeTools) Fetch(_ context.Context, url, _, _ string) error {
 	return nil
 }
 
-func (f *fakeTools) Extract(context.Context, string, string) error {
+func (f *fakeTools) Extract(_ context.Context, tgz, dstDir string) error {
 	f.calls = append(f.calls, "extract")
+	if filepath.Base(tgz) == "playwright-core.tgz" {
+		// setup patches the driver bundle, so the real file system needs one.
+		lib := filepath.Join(dstDir, "package", "lib")
+		if err := os.MkdirAll(lib, 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(lib, "coreBundle.js"), []byte("pageError.location.url pageError.location.lineNumber pageError.location.columnNumber"), 0o644)
+	}
 	return nil
 }
 
-func (f *fakeTools) Install(context.Context, string, string, bool, io.Writer) error {
-	f.calls = append(f.calls, "browser")
+func (f *fakeTools) ExtractZip(_ context.Context, _, dstDir string) error {
+	f.calls = append(f.calls, "extract zip")
+	return os.MkdirAll(dstDir, 0o755)
+}
+
+func (f *fakeTools) ExtractFile(context.Context, string, string, string, fs.FileMode) error {
+	f.calls = append(f.calls, "extract file")
+	return nil
+}
+
+func (f *fakeTools) InstallDeps(context.Context, string, io.Writer) error {
+	f.calls = append(f.calls, "browser deps")
 	return nil
 }
 
@@ -49,13 +71,22 @@ func (f *fakeTools) IsRoot() bool            { return f.root }
 func (f *fakeTools) Arch() string            { return f.arch }
 func (f *fakeTools) HasOnPath(n string) bool { return f.path[n] }
 
+func (f *fakeTools) Restricted() (bool, error) { return f.restricted, nil }
+func (f *fakeTools) Loaded(string) bool        { return f.loaded }
+
+func (f *fakeTools) Install(context.Context, string, io.Writer) error {
+	f.calls = append(f.calls, "sandbox")
+	f.loaded = true
+	return nil
+}
+
 // setupFor is a setup command over the real file system in a temp dir and
 // fake tools.
 func setupFor(t *testing.T, f *fakeTools) (setupConfig, string) {
 	t.Helper()
 	dir := t.TempDir() + "/install"
 	return setupConfig{
-		Deps: setup.Deps{Fetch: f, Browser: f, Packages: f, Files: osfs.FS{}, Host: f},
+		Deps: setup.Deps{Fetch: f, Browser: f, Packages: f, Files: osfs.FS{}, Host: f, Sandbox: f},
 		Dir:  dir, Version: "1.0.0", Getenv: func(string) string { return "" },
 	}, dir
 }
@@ -70,7 +101,7 @@ func runSetup(cfg setupConfig, args ...string) (code int, stdout, stderr string)
 	return code, out.String(), errb.String()
 }
 
-func TestSetupCheck_emptyDirReportsFivePiecesAndExits1(t *testing.T) { // runs without root
+func TestSetupCheck_emptyDirReportsSixPiecesAndExits1(t *testing.T) { // runs without root
 	f := newTools(false)
 	cfg, dir := setupFor(t, f)
 	code, stdout, stderr := runSetup(cfg, "--check")
@@ -78,12 +109,19 @@ func TestSetupCheck_emptyDirReportsFivePiecesAndExits1(t *testing.T) { // runs w
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("stdout has %d lines, want 5:\n%s", len(lines), stdout)
+	if len(lines) != 6 {
+		t.Fatalf("stdout has %d lines, want 6:\n%s", len(lines), stdout)
 	}
-	for i, piece := range []string{"piper", "voices", "driver", "chromium", "ffmpeg"} {
-		if !strings.HasPrefix(lines[i], piece+": missing") {
-			t.Errorf("line %d = %q, want %q: missing", i, lines[i], piece)
+	// Sandbox is a property of the kernel, not the install dir: the fake's
+	// kernel is unrestricted by default, so it is ok here, unlike every other
+	// piece on an empty dir.
+	want := []struct{ piece, status string }{
+		{"piper", "missing"}, {"voices", "missing"}, {"driver", "missing"},
+		{"chromium", "missing"}, {"sandbox", "ok"}, {"ffmpeg", "missing"},
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(lines[i], w.piece+": "+w.status) {
+			t.Errorf("line %d = %q, want %q: %s", i, lines[i], w.piece, w.status)
 		}
 	}
 	if !strings.Contains(stderr, "setup is incomplete") {
@@ -134,7 +172,7 @@ func TestSetup_asRootInstallsEverythingAndExits0(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr %q", code, stderr)
 	}
-	for _, piece := range []string{"piper: ok", "voices: ok", "driver: ok", "chromium: ok", "ffmpeg: ok"} {
+	for _, piece := range []string{"piper: ok", "voices: ok", "driver: ok", "chromium: ok", "sandbox: ok", "ffmpeg: ok"} {
 		if !strings.Contains(stdout, piece) {
 			t.Errorf("stdout lacks %q:\n%s", piece, stdout)
 		}

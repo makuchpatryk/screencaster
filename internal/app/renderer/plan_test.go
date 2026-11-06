@@ -54,6 +54,11 @@ const work = "/work"
 // in-memory file system.
 func workDir(script string) (string, *memFS) {
 	files := newMemFS()
+	// The working directory always exists for a real render; within's symlink
+	// check (M3) needs something to resolve even when no script is written.
+	if err := files.MkdirAll(work, 0o755); err != nil {
+		panic(err)
+	}
 	if script != "" {
 		files.write(work+"/demos/demo.yaml", script)
 	}

@@ -149,11 +149,20 @@ func (l Launcher) Launch(ctx context.Context, o Options) (*Session, error) {
 	return s, nil
 }
 
+// launchOptions are the options every Chromium launch uses. The sandbox is on:
+// Playwright adds --no-sandbox unless ChromiumSandbox is true, and nothing here
+// falls back to it (decision 83; security audit M1).
+func launchOptions() playwright.BrowserTypeLaunchOptions {
+	return playwright.BrowserTypeLaunchOptions{ChromiumSandbox: playwright.Bool(true)}
+}
+
 func (s *Session) open(o Options) error {
 	var err error
-	s.browser, err = s.pw.Chromium.Launch()
+	s.browser, err = s.pw.Chromium.Launch(launchOptions())
 	if err != nil {
-		return fmt.Errorf("launch chromium: %w", err)
+		// No retry without the sandbox: a launch that cannot start it fails here
+		// (decision 83).
+		return fmt.Errorf("launch chromium with its sandbox (see README \"Chromium sandbox\"): %w", err)
 	}
 
 	size := &playwright.Size{Width: Width, Height: Height}

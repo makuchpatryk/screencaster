@@ -215,7 +215,7 @@ None identified by user.
   - `outputDir` (string, optional, relative to the demo file's folder and inside the working dir, default `output`, so the videos of `demos/x.yaml` land in `demos/output/`)
   - `intro`, `outro` (optional; omitted or `false` for no card, `true` or `{}` for the built-in card, or an object `{image?, title?, subtitle?, durationMs?}`; see FR-009). `image` is a path to a PNG or JPEG, relative to the demo file's folder and inside the working dir
   - `voices` (object, optional; keys are language codes, values are Piper voice names; built-in defaults: `en` → `en_US-ryan-high`, `pl` → `pl_PL-darkman-medium`)
-- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A `storageState` that is not an object of that shape (a path string, a cookie with neither `url` nor `domain` and `path`) → a schema validation error at `/storageState...`, reported together with the script and voice errors. An `outputDir` that resolves outside the working dir (`..` past it or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>`, because the script is written by an LLM; so is a script outside the working dir whose default `output` folder would be outside too. An `intro` or `outro` `image` follows the same rule (`/intro/image: intro.image must stay inside the working directory: <value>`), must exist (`/intro/image: image not found: <absolute path>`) and must be a regular file with a `.png`, `.jpg` or `.jpeg` name whose first bytes are those of a PNG or JPEG (`/intro/image: image is not a PNG or JPEG: <absolute path>`); `image` together with `title` or `subtitle` and a `durationMs` outside 500–10000 are schema errors. All of it is checked before any browser or TTS work. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
+- **Edge cases:** A voice not present in the image → validation error `voice not installed: <name>`. Only voices of selected languages are checked. A relative `baseUrl` → `/baseUrl: baseUrl must be an absolute http or https URL: <value>`. A `storageState` that is not an object of that shape (a path string, a cookie with neither `url` nor `domain` and `path`) → a schema validation error at `/storageState...`, reported together with the script and voice errors. An `outputDir` that resolves outside the working dir (`..` past it or an absolute path elsewhere) → `/outputDir: outputDir must stay inside the working directory: <value>`, because the script is written by an LLM; so is a script outside the working dir whose default `output` folder would be outside too. The same check follows a symlink: if `outputDir`, `intro`/`outro` `image`, or the screenshots folder resolves, through any in-path symlink, to somewhere outside the working directory, it is refused with the same message, before anything is written; a dangling symlink is refused the same way; a symlink that stays inside the working directory still works (security audit M3). An `intro` or `outro` `image` follows the same rule (`/intro/image: intro.image must stay inside the working directory: <value>`), must exist (`/intro/image: image not found: <absolute path>`) and must be a regular file with a `.png`, `.jpg` or `.jpeg` name whose first bytes are those of a PNG or JPEG (`/intro/image: image is not a PNG or JPEG: <absolute path>`); `image` together with `title` or `subtitle` and a `durationMs` outside 500–10000 are schema errors. All of it is checked before any browser or TTS work. If a `screencaster.yaml` exists in the working directory, the CLI prints `screencaster.yaml is ignored; move its fields into the demo script` to stderr on every render and the MCP server logs it once at startup.
 - **Acceptance criteria:**
   - Given a script without `baseUrl`, when any render starts, then it fails schema validation (`/baseUrl`) before launching a browser.
   - Given a script without `voices`, when rendering `en`, then the audio uses `en_US-ryan-high`; when rendering `pl`, then it uses `pl_PL-darkman-medium`.
@@ -377,12 +377,13 @@ None identified by user.
   - Piper with voices `en_US-ryan-high` and `pl_PL-darkman-medium` (extra voices can be added as `.onnx` + `.onnx.json` files in `/work/voices`)
   - ffmpeg/ffprobe
 
-  The working dir is `/work`.
+  The working dir is `/work`. The image's last `USER` is a fixed, unprivileged `65532:65532` (security audit M8): a `docker run` with no `--user` runs as that uid/gid instead of root. Chromium's sandbox is always on; in Docker this needs the tracked seccomp profile shipped alongside the image (`scripts/seccomp-chromium.json`), passed with `--security-opt seccomp=<path>` (security audit M1).
 
   The README must document this Claude Code `.mcp.json` entry:
-  - command: `docker run -i --rm --init --user <uid>:<gid> -v <project>:/work screencaster screencaster-mcp`
+  - command: `docker run -i --rm --init --user <uid>:<gid> --security-opt seccomp=<path to seccomp-chromium.json> -v <project>:/work screencaster screencaster-mcp`
 - **Acceptance criteria:**
   - Given the image, when started with the command above from Claude Code, then `render_video`, `get_render_status`, `explore_page` and `get_options` are listed as tools, and the prompt `create_demo` is listed.
+  - Given the image, when started with no `--security-opt seccomp=...`, then the render fails with the Chromium sandbox error and no partial output, rather than falling back to an unsandboxed launch.
   - Given a target app on host port 3000 and baseUrl `http://host.docker.internal:3000`, when rendering, then pages load.
 
 ### FR-017: MCP tool `explore_page`
@@ -457,7 +458,7 @@ None identified by user.
 | finished_at | TEXT | no | RFC 3339 UTC | |
 | outputs_json | TEXT | no | JSON `[{lang,path,durationMs}]` | set on success |
 | error_json | TEXT | no | JSON `{step,lang,action,target,message}` | set on failure; `interrupted` uses `{message:"interrupted"}` |
-| script | TEXT | no | the YAML as validated by `render_video` | the job renders these bytes, not the file at run time; `NULL` only in rows from before the column, which fail with `job has no script snapshot` |
+| script | TEXT | no | the YAML as validated by `render_video` | the job renders these bytes, not the file at run time; `NULL` in rows from before the column (fail with `job has no script snapshot`) and also once the job reaches `succeeded` or `failed` — the row itself is kept forever (BR-007), only the snapshot (which may carry a `storageState` with live cookies) is blanked at that point (security audit M4) |
 
 ### Files (no DB)
 - `demos/*.yaml` (scripts, each with its own target settings), `<outputDir>/*.mp4` (default `demos/output/` for `demos/x.yaml`), and for a screenshots script `<outputDir>/<name>/screenshots/NN.png` (FR-020).
@@ -494,7 +495,7 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 
 ### NFR-003: Offline TTS
 - **Requirement:** Rendering must make no network requests other than to the target app.
-- **Verification:** Code review; no HTTP clients besides Chromium, except `adapters/download`, which only `screencaster setup` (the explicit install command) reaches.
+- **Verification:** Code review; no HTTP clients besides Chromium, except `adapters/download`, which only `screencaster setup` (the explicit install command) reaches. `setup` fetches the Playwright driver, Chromium, its headless shell and Playwright's ffmpeg itself, from pins checked against sha256 (security audit H2); it no longer calls `playwright.Install`, so a render never triggers a Playwright-managed download either.
 
 ### NFR-004: Compliance / availability
 - N/A — confirmed by user.
@@ -621,6 +622,11 @@ N/A — confirmed by user (local single-user tool). Target-app auth is storageSt
 | 74 | Annotations (box, arrow, label, dim) are a DOM overlay in document coordinates, injected before the capture and removed after; opt-in per step. Moves overlays from 10.2 into the MVP for screenshots only | Go image post-processing | User choice. Chromium already renders the text and glyphs; no new dependency. |
 | 75 | `domain/shooter` runs a screenshots script and intercepts `screenshot` steps; the executor is unchanged; `app/renderer` reaches it through a `Shooter` port wired in `app/wire`. `take_screenshots` reuses the queue, worker, lock and `get_render_status`; no job-kind column | `Page.Screenshot` plus an executor case; the capture loop in `adapters/browser`; a separate queue | The executor stays file-agnostic and its fakes untouched; step semantics stay in one place; the renderer branches on the script type, so the worker needs no change. |
 | 81 | Cards are off unless the script sets `intro`/`outro`: `true` or `{}` is the built-in card, an object customises it, and omitted or `false` is none. Amends 63's default | Keep default-on (63); reject `false`; only `{}` opts in | User choice (issue #2). A demo is plain unless cards are asked for; `false` stays valid so existing scripts keep working. |
+| 82 | `setup` fetches and sha256-verifies the Playwright driver and browsers itself; no `playwright.Install` ships. Security audit H2. See ARCHITECTURE.md §16 decision 82. | Trust the installer's own download | User choice: no unverified bytes run as root. |
+| 83 | Chromium's sandbox is always on, fail closed; Docker via a tracked seccomp profile, native Ubuntu 24.04+ via an AppArmor profile `setup` installs. Security audit M1. See ARCHITECTURE.md §16 decision 83. | `--no-sandbox` fallback; `--cap-add SYS_ADMIN` | User choice: security over a convenience flag. |
+| 84 | Working-directory path checks resolve symlinks before the containment check (MCP script path, `outputDir`, card images, screenshots folder); archive extraction does the same for a symlinked parent. Security audit M2/M3. See ARCHITECTURE.md §16 decision 84. | Refuse every symlink | User choice: keeps in-tree links working. |
+| 85 | `.screencaster/` and `jobs.db` get restrictive permissions, fail closed on a chmod error; a job's script snapshot is cleared once terminal. Security audit M4. See ARCHITECTURE.md §16 decision 85. | Strip cookies instead; warn instead of fail | User choice: keeps queued-job recovery working; no silent weak permissions. |
+| 86 | `release.yml` is gated to `main`, runs vet/tests first, and publishes `SHA256SUMS`; actions and base images are pinned by SHA/digest; the runtime image is non-root by default. Security audit M5/M6/M7/M8. See ARCHITECTURE.md §16 decision 86. | Build provenance attestations | Attestations are a larger, separate effort; out of scope here. |
 
 ## 21. Open Questions
 None.

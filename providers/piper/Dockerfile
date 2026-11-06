@@ -15,7 +15,7 @@ ARG RUNTIME_BASE=screencaster-base
 # by dev and runtime so both run the same bytes. Everything is sha256-pinned;
 # the voices come from a fixed Hugging Face revision. The binary finds its libs
 # and espeak-ng-data next to itself.
-FROM debian:bookworm-slim AS piper
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS piper
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*

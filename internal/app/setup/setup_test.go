@@ -59,14 +59,20 @@ func (f *memFS) MakeReadable(paths ...string) error {
 	return nil
 }
 
-// fakeFetch writes what a real download would: the voice content, a tarball,
-// and (on Extract) the Piper binary.
+// fakeFetch writes what a real download would: the voice content, an archive
+// file, and on extract what the archive holds (the Piper binary, the driver
+// package, a browser folder's files).
 type fakeFetch struct {
 	fs      *memFS
 	fetched []fetchCall
 	failURL string
-	extract int
+	extract int           // Extract calls: the tar.gz of Piper and of playwright-core
+	zips    []extractCall // ExtractZip calls: the archive and where it went
+	files   []string      // ExtractFile destinations
+	zipErr  error         // returned by ExtractZip, after it records the call
 }
+
+type extractCall struct{ archive, dstDir string }
 
 type fetchCall struct{ url, dst, sha string }
 
@@ -79,11 +85,38 @@ func (f *fakeFetch) Fetch(_ context.Context, url, dst, sha string) error {
 	return nil
 }
 
-func (f *fakeFetch) Extract(_ context.Context, _, dstDir string) error {
+func (f *fakeFetch) Extract(_ context.Context, tgz, dstDir string) error {
 	f.extract++
+	if filepath.Base(tgz) == "playwright-core.tgz" {
+		f.fs.put(filepath.Join(dstDir, "package", "index.js"), "js")
+		f.fs.put(filepath.Join(dstDir, "package", "lib", "coreBundle.js"), unpatchedBundle)
+		return nil
+	}
 	f.fs.put(PiperBin(dstDir), "piper")
 	return nil
 }
+
+func (f *fakeFetch) ExtractZip(_ context.Context, zipPath, dstDir string) error {
+	f.zips = append(f.zips, extractCall{zipPath, dstDir})
+	if f.zipErr != nil {
+		return f.zipErr
+	}
+	f.fs.put(filepath.Join(dstDir, "binary"), "bin")
+	return nil
+}
+
+func (f *fakeFetch) ExtractFile(_ context.Context, _, _, dst string, _ fs.FileMode) error {
+	f.files = append(f.files, dst)
+	f.fs.put(dst, "node")
+	return nil
+}
+
+// The two driver bundle texts: what playwright-core ships and what playwright-go
+// turns it into (setup applies the same edits).
+const (
+	unpatchedBundle = "a(pageError.location.url, pageError.location.lineNumber, pageError.location.columnNumber)"
+	patchedBundle   = `a(pageError.location?.url || "", pageError.location?.lineNumber || 0, pageError.location?.columnNumber || 0)`
+)
 
 func (f *fakeFetch) urls() []string {
 	var u []string
@@ -93,26 +126,15 @@ func (f *fakeFetch) urls() []string {
 	return u
 }
 
-type browserCall struct {
-	driver, browsers string
-	withDeps         bool
-}
-
+// fakeBrowser records the driver dirs InstallDeps ran for.
 type fakeBrowser struct {
-	fs    *memFS
-	calls []browserCall
+	calls []string
 	err   error
 }
 
-func (b *fakeBrowser) Install(_ context.Context, driverDir, browsersDir string, withDeps bool, _ io.Writer) error {
-	b.calls = append(b.calls, browserCall{driverDir, browsersDir, withDeps})
-	if b.err != nil {
-		return b.err
-	}
-	b.fs.put(filepath.Join(driverDir, "node"), "node")
-	b.fs.put(filepath.Join(driverDir, "package", "index.js"), "js")
-	b.fs.put(filepath.Join(browsersDir, "chromium-1234", "chrome"), "chrome")
-	return nil
+func (b *fakeBrowser) InstallDeps(_ context.Context, driverDir string, _ io.Writer) error {
+	b.calls = append(b.calls, driverDir)
+	return b.err
 }
 
 type fakePackages struct {
@@ -143,6 +165,29 @@ func (h *fakeHost) IsRoot() bool            { return h.root }
 func (h *fakeHost) Arch() string            { return h.arch }
 func (h *fakeHost) HasOnPath(n string) bool { return h.onPath[n] }
 
+// fakeSandbox defaults to an unrestricted kernel (the common case, and most
+// dev/CI machines), so the sandbox piece is ok with no work unless a test
+// sets restricted.
+type fakeSandbox struct {
+	restricted    bool
+	restrictedErr error
+	loaded        bool
+	installs      []string // chromePath per Install call
+	installErr    error
+}
+
+func (s *fakeSandbox) Restricted() (bool, error) { return s.restricted, s.restrictedErr }
+func (s *fakeSandbox) Loaded(string) bool        { return s.loaded }
+
+func (s *fakeSandbox) Install(_ context.Context, chromePath string, _ io.Writer) error {
+	s.installs = append(s.installs, chromePath)
+	if s.installErr != nil {
+		return s.installErr
+	}
+	s.loaded = true
+	return nil
+}
+
 // voiceContent is what the fake downloads write; testPins pins its sha256.
 var voiceContent = map[string]string{"a.onnx": "aaa", "b.onnx.json": "bbb"}
 
@@ -161,27 +206,30 @@ func testPins() Pins {
 	return p
 }
 
-// rig is a bare machine: root, amd64, apt, nothing installed.
+// rig is a bare machine: root, amd64, apt, an unrestricted kernel, nothing
+// installed.
 type rig struct {
-	pins  Pins
-	fs    *memFS
-	fetch *fakeFetch
-	br    *fakeBrowser
-	pk    *fakePackages
-	host  *fakeHost
+	pins    Pins
+	fs      *memFS
+	fetch   *fakeFetch
+	br      *fakeBrowser
+	pk      *fakePackages
+	host    *fakeHost
+	sandbox *fakeSandbox
 }
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{pins: testPins(), fs: newMemFS(), host: &fakeHost{root: true, arch: "amd64", onPath: map[string]bool{}}}
 	r.fetch = &fakeFetch{fs: r.fs}
-	r.br = &fakeBrowser{fs: r.fs}
+	r.br = &fakeBrowser{}
 	r.pk = &fakePackages{host: r.host, apt: true}
+	r.sandbox = &fakeSandbox{}
 	return r
 }
 
 func (r *rig) deps() Deps {
-	return Deps{Fetch: r.fetch, Browser: r.br, Packages: r.pk, Files: r.fs, Host: r.host}
+	return Deps{Fetch: r.fetch, Browser: r.br, Packages: r.pk, Files: r.fs, Host: r.host, Sandbox: r.sandbox}
 }
 
 func (r *rig) opts() Options { return Options{Dir: testDir, Pins: r.pins, Version: testVersion} }
@@ -194,16 +242,22 @@ func (r *rig) installAll() {
 	}
 	r.fs.put(filepath.Join(DriverDir(testDir), "node"), "node")
 	r.fs.put(filepath.Join(DriverDir(testDir), "package", "index.js"), "js")
-	r.fs.put(filepath.Join(BrowsersDir(testDir), "chromium-1234", "chrome"), "chrome")
-	r.fs.put(markerPath(testDir), `{"piper":"`+r.pins.piperTag()+`","driver":"`+testVersion+`","chromium":"`+testVersion+`"}`)
+	r.fs.put(filepath.Join(DriverDir(testDir), "package", "lib", "coreBundle.js"), patchedBundle)
+	chromium, shell, ffmpegDir := browserDirs(BrowsersDir(testDir), r.pins)
+	for _, d := range []string{chromium, shell, ffmpegDir} {
+		r.fs.put(filepath.Join(d, installComplete), "")
+	}
+	tag := testVersion + "/" + r.pins.playwrightTag()
+	r.fs.put(markerPath(testDir), `{"piper":"`+r.pins.piperTag()+`","driver":"`+tag+`","chromium":"`+tag+`"}`)
 	r.host.onPath["ffmpeg"], r.host.onPath["ffprobe"] = true, true
 }
 
 func (r *rig) noWork(t *testing.T) {
 	t.Helper()
-	if len(r.fetch.fetched) != 0 || r.fetch.extract != 0 || len(r.br.calls) != 0 || r.pk.installs != 0 {
-		t.Errorf("work done: fetched %v, extracts %d, browser %v, apt %d",
-			r.fetch.urls(), r.fetch.extract, r.br.calls, r.pk.installs)
+	if len(r.fetch.fetched) != 0 || r.fetch.extract != 0 || len(r.fetch.zips) != 0 || len(r.fetch.files) != 0 ||
+		len(r.br.calls) != 0 || r.pk.installs != 0 || len(r.sandbox.installs) != 0 {
+		t.Errorf("work done: fetched %v, extracts %d, zips %v, files %v, browser %v, apt %d, sandbox %v",
+			r.fetch.urls(), r.fetch.extract, r.fetch.zips, r.fetch.files, r.br.calls, r.pk.installs, r.sandbox.installs)
 	}
 }
 
@@ -233,11 +287,14 @@ func TestCheck_emptyDirReportsEveryPieceInOrder(t *testing.T) {
 	var order []string
 	for _, p := range rep {
 		order = append(order, p.Piece)
-		if p.Status == StatusOK {
+		// Sandbox is a property of the kernel, not the install dir: the rig's
+		// kernel is unrestricted by default, so it is ok here unlike every
+		// other piece on an empty dir.
+		if p.Piece != PieceSandbox && p.Status == StatusOK {
 			t.Errorf("%s is ok on an empty dir", p.Piece)
 		}
 	}
-	if want := []string{"piper", "voices", "driver", "chromium", "ffmpeg"}; !slices.Equal(order, want) {
+	if want := []string{"piper", "voices", "driver", "chromium", "sandbox", "ffmpeg"}; !slices.Equal(order, want) {
 		t.Errorf("order %v, want %v", order, want)
 	}
 }
@@ -270,12 +327,8 @@ func TestRun_emptyMachineInstallsEverything(t *testing.T) {
 	if r.fs.has(filepath.Join(testDir, "piper.tgz")) {
 		t.Error("piper tarball not removed after extract")
 	}
-	if len(r.br.calls) != 1 {
-		t.Fatalf("browser installs %d, want exactly 1 for driver and chromium", len(r.br.calls))
-	}
-	want := browserCall{DriverDir(testDir), BrowsersDir(testDir), true}
-	if r.br.calls[0] != want {
-		t.Errorf("browser call %+v, want %+v", r.br.calls[0], want)
+	if want := []string{DriverDir(testDir)}; !slices.Equal(r.br.calls, want) {
+		t.Errorf("install-deps calls %v, want %v (one, with apt)", r.br.calls, want)
 	}
 	if r.pk.installs != 1 {
 		t.Errorf("apt installs %d, want 1", r.pk.installs)
@@ -285,6 +338,7 @@ func TestRun_emptyMachineInstallsEverything(t *testing.T) {
 	}
 	// The second run is a no-op (success criterion).
 	r.fetch.fetched, r.br.calls, r.pk.installs, r.fetch.extract = nil, nil, 0, 0
+	r.fetch.zips, r.fetch.files = nil, nil
 	if _, err := Run(context.Background(), r.deps(), r.opts()); err != nil {
 		t.Fatal(err)
 	}
@@ -355,13 +409,16 @@ func TestRun_corruptMarkerKeepsGoodVoicesAndRepairsTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reinstalled := append([]string{r.pins.PiperURL()}, playwrightURLs(r.pins)...)
 	for _, u := range r.fetch.urls() {
-		if u != r.pins.PiperURL() {
+		if !slices.Contains(reinstalled, u) {
 			t.Errorf("refetched %s; voices on disk are good and must be kept", u)
 		}
 	}
-	if r.fetch.extract != 1 || len(r.br.calls) != 1 {
-		t.Errorf("extracts %d, browser installs %d; want 1 and 1 (nothing recorded, so re-verified by reinstall)", r.fetch.extract, len(r.br.calls))
+	// Piper and the playwright-core package are unpacked again, and the browser
+	// pieces are reinstalled (nothing recorded, so re-verified by reinstall).
+	if r.fetch.extract != 2 || len(r.fetch.zips) != 3 || len(r.br.calls) != 1 {
+		t.Errorf("extracts %d, zips %d, install-deps %d; want 2, 3 and 1", r.fetch.extract, len(r.fetch.zips), len(r.br.calls))
 	}
 	if !rep.AllOK() {
 		t.Errorf("report %v, want all ok", rep)
@@ -376,8 +433,145 @@ func TestRun_newReleaseReinstallsTheBrowserOnly(t *testing.T) {
 	if _, err := Run(context.Background(), r.deps(), o); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.br.calls) != 1 || len(r.fetch.fetched) != 0 || r.pk.installs != 0 {
-		t.Errorf("browser %d, fetched %v, apt %d; want only the browser reinstalled", len(r.br.calls), r.fetch.urls(), r.pk.installs)
+	if want := playwrightURLs(r.pins); !slices.Equal(r.fetch.urls(), want) || len(r.br.calls) != 1 || r.pk.installs != 0 {
+		t.Errorf("fetched %v, install-deps %d, apt %d; want only the Playwright files %v", r.fetch.urls(), len(r.br.calls), r.pk.installs, want)
+	}
+}
+
+// playwrightURLs are the five pinned Playwright downloads, in install order.
+func playwrightURLs(p Pins) []string {
+	return []string{p.NodeURL(), p.CoreURL(), p.ChromiumURL(), p.HeadlessShellURL(), p.FFmpegURL()}
+}
+
+func TestRun_installsThePinnedPlaywrightFiles(t *testing.T) {
+	r := newRig(t)
+	r.installAll()
+	_ = r.fs.Remove(markerPath(testDir)) // driver and chromium rows get reinstalled
+	if _, err := Run(context.Background(), r.deps(), r.opts()); err != nil {
+		t.Fatal(err)
+	}
+	p := r.pins
+	var got []fetchCall
+	for _, c := range r.fetch.fetched {
+		if c.url != p.PiperURL() {
+			got = append(got, c)
+		}
+	}
+	want := []fetchCall{
+		{p.NodeURL(), filepath.Join(testDir, "node.tgz"), p.NodeSHA256},
+		{p.CoreURL(), filepath.Join(testDir, "playwright-core.tgz"), p.CoreSHA256},
+		{p.ChromiumURL(), filepath.Join(testDir, "chromium.zip"), p.ChromiumSHA256},
+		{p.HeadlessShellURL(), filepath.Join(testDir, "chromium-headless-shell.zip"), p.HeadlessShellSHA256},
+		{p.FFmpegURL(), filepath.Join(testDir, "ffmpeg.zip"), p.FFmpegSHA256},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("fetched %+v, want %+v", got, want)
+	}
+	if want := []string{filepath.Join(DriverDir(testDir), "node")}; !slices.Equal(r.fetch.files, want) {
+		t.Errorf("node extracted to %v, want %v", r.fetch.files, want)
+	}
+	chromium, shell, ffmpegDir := browserDirs(BrowsersDir(testDir), p)
+	var dirs []string
+	for _, z := range r.fetch.zips {
+		dirs = append(dirs, z.dstDir)
+	}
+	if want := []string{chromium, shell, ffmpegDir}; !slices.Equal(dirs, want) {
+		t.Errorf("zips extracted to %v, want %v", dirs, want)
+	}
+	for _, d := range []string{chromium, shell, ffmpegDir} {
+		for _, marker := range []string{installComplete, depsValidated} {
+			if !r.fs.has(filepath.Join(d, marker)) {
+				t.Errorf("%s lacks the %s marker", d, marker)
+			}
+		}
+	}
+	for _, f := range []string{"node.tgz", "playwright-core.tgz", "chromium.zip", "chromium-headless-shell.zip", "ffmpeg.zip"} {
+		if r.fs.has(filepath.Join(testDir, f)) {
+			t.Errorf("%s not removed after extract", f)
+		}
+	}
+}
+
+// The driver bundle must carry playwright-go's three edits, since its `Run`
+// does not apply them and setup no longer calls its installer.
+func TestRun_patchesTheDriverBundle(t *testing.T) {
+	r := newRig(t)
+	if _, err := Run(context.Background(), r.deps(), r.opts()); err != nil {
+		t.Fatal(err)
+	}
+	b, err := r.fs.ReadFile(filepath.Join(DriverDir(testDir), "package", "lib", "coreBundle.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != patchedBundle {
+		t.Errorf("bundle %q, want %q", b, patchedBundle)
+	}
+}
+
+func TestPatchDriver_failsWithoutThePattern(t *testing.T) {
+	r := newRig(t)
+	r.fs.put(filepath.Join(DriverDir(testDir), "package", "lib", "coreBundle.js"), "unrelated")
+	err := patchDriver(r.fs, DriverDir(testDir))
+	if err == nil || !strings.Contains(err.Error(), "pageError.location.url") {
+		t.Errorf("error %v, want one naming the missing pattern", err)
+	}
+}
+
+// A new pin (here a Chromium sha256) must reinstall the driver and browsers
+// and nothing else, even on the same release (decision 82).
+func TestRun_playwrightPinChangeReinstalls(t *testing.T) {
+	r := newRig(t)
+	r.installAll()
+	o := r.opts()
+	o.Pins.ChromiumSHA256 = shaB
+	rep, err := Check(context.Background(), r.deps(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep[2].Status != StatusBad || rep[3].Status != StatusBad {
+		t.Errorf("driver %v, chromium %v; want both bad after a pin change", rep[2], rep[3])
+	}
+	if _, err := Run(context.Background(), r.deps(), o); err != nil {
+		t.Fatal(err)
+	}
+	if want := playwrightURLs(o.Pins); !slices.Equal(r.fetch.urls(), want) || r.pk.installs != 0 {
+		t.Errorf("fetched %v, apt %d; want the Playwright files %v only", r.fetch.urls(), r.pk.installs, want)
+	}
+	if !r.fetch.fetchedSHA(shaB) {
+		t.Error("the new Chromium pin was not the one fetched")
+	}
+}
+
+func (f *fakeFetch) fetchedSHA(sha string) bool {
+	for _, c := range f.fetched {
+		if c.sha == sha {
+			return true
+		}
+	}
+	return false
+}
+
+// A zip that fails to unpack leaves no marker, so Check reports the browser as
+// missing and the next run redoes it.
+func TestRun_failedBrowserUnpackLeavesNoMarker(t *testing.T) {
+	r := newRig(t)
+	r.installAll()
+	_ = r.fs.Remove(markerPath(testDir))
+	r.fetch.zipErr = errors.New("disk full")
+	_, err := Run(context.Background(), r.deps(), r.opts())
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("error %v, want one with the unpack failure", err)
+	}
+	chromium, _, _ := browserDirs(BrowsersDir(testDir), r.pins)
+	if r.fs.has(filepath.Join(chromium, installComplete)) {
+		t.Error("the marker of a folder whose unpack failed is still there")
+	}
+	rep, err := Check(context.Background(), r.deps(), r.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep[3].Status != StatusMissing {
+		t.Errorf("chromium %v, want missing after a failed unpack", rep[3])
 	}
 }
 
@@ -431,7 +625,9 @@ func TestRun_errorsNameThePieceAndTheCommand(t *testing.T) {
 		want  []string
 	}{
 		{"piper download", func(r *rig) { r.fetch.failURL = r.pins.PiperURL() }, []string{"download piper", testPins().PiperURL()}},
-		{"browser", func(r *rig) { r.br.err = errors.New("npm down") }, []string{"install playwright driver and chromium", "npm down"}},
+		{"chromium libraries", func(r *rig) { r.br.err = errors.New("apt down") }, []string{"install chromium system libraries", "apt down"}},
+		{"node download", func(r *rig) { r.fetch.failURL = testPins().NodeURL() }, []string{"download node.tgz", testPins().NodeURL()}},
+		{"chromium download", func(r *rig) { r.fetch.failURL = testPins().ChromiumURL() }, []string{"download chromium.zip", testPins().ChromiumURL()}},
 		{"apt", func(r *rig) { r.pk.err = errors.New("no network") }, []string{"install ffmpeg", "apt-get install -y ffmpeg", "no network"}},
 	}
 	for _, tt := range tests {
@@ -485,12 +681,16 @@ func TestRun_withoutAptChromiumHasNoSystemDeps(t *testing.T) {
 	r := newRig(t)
 	r.installAll()
 	r.pk.apt = false
-	_ = r.fs.Remove(filepath.Join(BrowsersDir(testDir), "chromium-1234", "chrome"))
+	chromium, _, _ := browserDirs(BrowsersDir(testDir), r.pins)
+	_ = r.fs.Remove(filepath.Join(chromium, installComplete))
 	if _, err := Run(context.Background(), r.deps(), r.opts()); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.br.calls) != 1 || r.br.calls[0].withDeps {
-		t.Errorf("browser calls %+v, want one without deps", r.br.calls)
+	if len(r.br.calls) != 0 || len(r.fetch.zips) != 3 {
+		t.Errorf("install-deps calls %v, zips %d; want none and 3 (browsers installed, no system libraries)", r.br.calls, len(r.fetch.zips))
+	}
+	if r.fs.has(filepath.Join(chromium, depsValidated)) {
+		t.Error("DEPENDENCIES_VALIDATED written although install-deps did not run")
 	}
 }
 
@@ -574,5 +774,51 @@ func TestRun_existingDirIsNotMadeReadableWholesale(t *testing.T) {
 		if !slices.Contains(r.fs.readable, want) {
 			t.Errorf("made readable %v, lacks %s", r.fs.readable, want)
 		}
+	}
+}
+
+func TestCheck_sandboxOKWhenUnrestricted(t *testing.T) {
+	r := newRig(t)
+	r.installAll()
+	r.sandbox.restricted = false
+	rep, err := Check(context.Background(), r.deps(), r.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rep[4]; got.Status != StatusOK {
+		t.Errorf("sandbox %v, want ok on an unrestricted kernel", got)
+	}
+	r.noWork(t)
+}
+
+func TestRun_installsAppArmorProfileWhenRestricted(t *testing.T) {
+	r := newRig(t)
+	r.installAll()
+	r.sandbox.restricted = true
+	rep, err := Check(context.Background(), r.deps(), r.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep[4].Status != StatusMissing {
+		t.Errorf("sandbox %v, want missing before Run (kernel restricted, profile not loaded)", rep[4])
+	}
+	rep, err = Run(context.Background(), r.deps(), r.opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.AllOK() {
+		t.Errorf("report %v, want all ok", rep)
+	}
+	want := chromiumExecutable(BrowsersDir(testDir), r.pins)
+	if !slices.Equal(r.sandbox.installs, []string{want}) {
+		t.Errorf("AppArmor Install calls %v, want [%s]", r.sandbox.installs, want)
+	}
+	// The second run is a no-op: the profile is now loaded.
+	r.sandbox.installs = nil
+	if _, err := Run(context.Background(), r.deps(), r.opts()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.sandbox.installs) != 0 {
+		t.Errorf("sandbox reinstalled on an already-loaded profile: %v", r.sandbox.installs)
 	}
 }
