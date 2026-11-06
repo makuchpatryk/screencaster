@@ -74,11 +74,11 @@ Prompt: `/mcp__screencaster__create_demo [description]`.
 
 Chromium's own sandbox is on by default (decision 83) and never falls back to `--no-sandbox`; a render fails closed if it cannot start.
 
-- **Docker**: the sandbox needs a user namespace, which Docker's default seccomp profile only allows for unprivileged processes through one carve-out. `screencaster-docker` (the release asset above) and `compose.yaml` already pass it; a raw `docker run` of the `screencaster` image needs `--security-opt seccomp=scripts/seccomp-chromium.json` (from this repo) too, or the render fails with the error below.
+- **Docker**: the sandbox needs to create several namespaces unprivileged (user, pid, net, ...), which Docker's own default seccomp profile reserves for processes with `CAP_SYS_ADMIN`. `screencaster-docker` (the release asset above) and `compose.yaml` already pass the fixed-up profile below; a raw `docker run` of the `screencaster` image needs `--security-opt seccomp=scripts/seccomp-chromium.json` (from this repo) too, or the render fails with the error below.
 - **Native** (Debian/Ubuntu, linux amd64): `sudo ./screencaster setup` installs an AppArmor profile automatically, but only on a kernel that restricts unprivileged user namespaces (Ubuntu 24.04+); elsewhere there is nothing to install. `setup --check` reports the `sandbox` piece.
 - **Error you'll see without either**: `launch chromium with its sandbox (see README "Chromium sandbox"): <<the underlying launch error>>`.
 
-`scripts/seccomp-chromium.json` is Docker's own default profile, copied byte-for-byte, unmodified, from `moby/profiles` at commit `6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef` (2026-09-17) — see `docs/ARCHITECTURE.md` §14 for why no addition was needed.
+`scripts/seccomp-chromium.json` starts from Docker's own default profile, copied byte-for-byte from `moby/profiles` at commit `6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef` (2026-09-17), plus one added rule: that stock profile only lets an unprivileged process create a namespace (`clone`/`unshare`/`setns`) when none of `CLONE_NEWUSER`/`NEWPID`/`NEWNET`/`NEWNS`/`NEWIPC`/`NEWUTS`/`NEWCGROUP` are set, which blocks Chromium's own unprivileged sandbox outright; the added rule allows exactly those flags (still nothing CAP_SYS_ADMIN-gated, like `mount` or `bpf`) and is commented in the file with the exact `strace` evidence. See `docs/ARCHITECTURE.md` §14 for the full writeup.
 
 ## Docs
 

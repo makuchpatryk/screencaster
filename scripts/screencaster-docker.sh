@@ -9,7 +9,8 @@
 # (decision 77). The wrapper ships alone (no sibling files), so the Chromium
 # sandbox's seccomp profile is embedded below rather than referenced by path
 # (decision 83; see README "Chromium sandbox" and ARCHITECTURE §14 for the
-# pinned moby/profiles commit the profile was copied from, byte-for-byte).
+# pinned moby/profiles commit the profile started from, plus the one rule
+# added on top for Chromium's own unprivileged namespace creation).
 set -eu
 
 seccomp_profile="$(mktemp)"
@@ -1240,6 +1241,28 @@ cat > "$seccomp_profile" <<'SECCOMP_PROFILE_EOF'
 					"CAP_PERFMON"
 				]
 			}
+		},
+		{
+			"names": [
+				"clone",
+				"unshare",
+				"setns"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"args": [
+				{
+					"index": 0,
+					"value": 2180906752,
+					"valueTwo": 0,
+					"op": "SCMP_CMP_MASKED_EQ"
+				}
+			],
+			"excludes": {
+				"caps": [
+					"CAP_SYS_ADMIN"
+				]
+			},
+			"comment": "Addition on top of the moby/profiles copy above (decision 83, M1 fix-up): the stock clone() carve-out above only allows an unprivileged (no CAP_SYS_ADMIN) process to fork/thread when NONE of CLONE_NEWNS/NEWCGROUP/NEWUTS/NEWIPC/NEWUSER/NEWPID/NEWNET are set; every namespace-creating syscall stays CAP_SYS_ADMIN-only otherwise. Chromium's own unprivileged sandbox creates its user/pid/net/mount/ipc/uts/cgroup namespaces via several clone()/unshare()/setns() calls, each setting one or more of those flags and nothing else (observed by strace against the shipped build: CLONE_NEWUSER, then CLONE_NEWPID, then CLONE_NEWUSER|CLONE_NEWPID|CLONE_NEWNET together), and the stock profile denies every one of them, independent of the AppArmor unprivileged-userns restriction. This rule allows exactly that and nothing more: value 2180906752 (0x81FDFF00) is every flag bit except CSIGNAL and those same 7 namespace flags; SCMP_CMP_MASKED_EQ with valueTwo 0 passes only when none of those other bits are set, so any mix of just the 7 namespace flags (plus a signal number) matches, while CAP_SYS_ADMIN-gated syscalls (mount, bpf, ptrace, ...) and any other clone()/unshare()/setns() flag stay denied. The rest of this file is unchanged from the pinned commit above."
 		}
 	]
 }
