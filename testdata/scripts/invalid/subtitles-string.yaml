@@ -1,0 +1,4 @@
+name: demo
+subtitles: "yes"
+steps:
+  - goto: http://host.docker.internal:3000/

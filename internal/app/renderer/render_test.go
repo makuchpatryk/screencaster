@@ -46,9 +46,10 @@ type fakes struct {
 	cardsErr error
 	cancel   context.CancelFunc // called during the first Record, if set
 
-	recIn []RecordRequest
-	asmIn []AssembleRequest
-	shots [][]Shot // one entry per Screenshot call
+	recIn    []RecordRequest
+	asmIn    []AssembleRequest
+	shots    [][]Shot // one entry per Screenshot call
+	subsData []string // the subs.ass content seen by Assemble, one per call with Subs set
 
 	now   time.Time // fake clock; each tool call advances it
 	files *memFS    // where the tools write their outputs
@@ -123,6 +124,12 @@ func (f *fakes) Record(ctx context.Context, in RecordRequest) (Recording, error)
 func (f *fakes) Assemble(_ context.Context, in AssembleRequest) (Assembly, error) {
 	f.log = append(f.log, "assemble "+filepath.Base(filepath.Dir(in.Out)))
 	f.asmIn = append(f.asmIn, in)
+	if in.Subs != nil {
+		// Render's own cleanup removes the run dir once it returns, so the
+		// subs.ass content is read here, while it still exists.
+		data, _ := f.files.read(in.Subs.Path)
+		f.subsData = append(f.subsData, data)
+	}
 	f.advance(2 * time.Second)
 	if f.asmErr != nil {
 		return Assembly{}, f.asmErr
@@ -512,4 +519,108 @@ func TestRender_cardsOffGiveNoStills(t *testing.T) { // decisions 63, 81
 	if got := f.recIn[0].StartImage; got != "" {
 		t.Errorf("StartImage = %q, want none without an intro", got)
 	}
+}
+
+// withSubtitles adds `subtitles: true` to twoStepsEnPl.
+func withSubtitles(script string) string {
+	return strings.Replace(script, "outro: true\n", "outro: true\nsubtitles: true\n", 1)
+}
+
+func TestRender_subtitlesOff_producesNoTrack(t *testing.T) { // FR-021
+	dir, files := workDir(twoStepsEnPl) // no subtitles key
+	f := &fakes{}
+
+	if _, err := Render(context.Background(), f.deps(files), request(dir)); err != nil {
+		t.Fatal(err)
+	}
+	for i, asm := range f.asmIn {
+		if asm.Subs != nil {
+			t.Errorf("asmIn[%d].Subs = %+v, want nil", i, asm.Subs)
+		}
+	}
+	if len(f.subsData) != 0 {
+		t.Errorf("subsData = %v, want none written", f.subsData)
+	}
+}
+
+func TestRender_subtitlesOnProducesCuesAndLangTag(t *testing.T) { // FR-021
+	dir, files := workDir(withSubtitles(twoStepsEnPl))
+	f := &fakes{}
+	req := request(dir)
+	var lines []string
+	req.Log = func(msg string) { lines = append(lines, msg) }
+
+	if _, err := Render(context.Background(), f.deps(files), req); err != nil {
+		t.Fatal(err)
+	}
+	en, pl := f.asmIn[0], f.asmIn[1]
+	if en.Subs == nil || en.Subs.Lang != "eng" {
+		t.Errorf("en: Subs = %+v, want Lang eng", en.Subs)
+	}
+	if pl.Subs == nil || pl.Subs.Lang != "pol" {
+		t.Errorf("pl: Subs = %+v, want Lang pol", pl.Subs)
+	}
+	if len(f.subsData) != 2 {
+		t.Fatalf("subsData has %d entries, want 2", len(f.subsData))
+	}
+	// Step 2 (click, no narration) gets no cue; steps 1 and 3 do.
+	enASS := f.subsData[0]
+	if !strings.Contains(enASS, "Hello.") || !strings.Contains(enASS, "Saved.") {
+		t.Errorf("en subs.ass = %q, want both cues", enASS)
+	}
+	if n := strings.Count(enASS, "Dialogue:"); n != 2 {
+		t.Errorf("en subs.ass has %d cues, want 2 (the un-narrated step has none)", n)
+	}
+	found := false
+	for _, l := range lines {
+		if strings.HasPrefix(l, "[en] subtitles: 2 cues (eng)") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("log =\n%s\nwant a subtitles cue count line", strings.Join(lines, "\n"))
+	}
+}
+
+func TestRender_subtitlesZeroCuesLogsAndSkipsTrack(t *testing.T) { // FR-021
+	// pl's narration is silent on the one narrated step, so pl gets no cue.
+	script := strings.Replace(withSubtitles(twoStepsEnPl), "pl: Cześć.", `pl: ""`, 1)
+	script = strings.Replace(script, "pl: Zapisane.", `pl: ""`, 1)
+	dir, files := workDir(script)
+	f := &fakes{}
+	req := request(dir)
+	var lines []string
+	req.Log = func(msg string) { lines = append(lines, msg) }
+
+	if _, err := Render(context.Background(), f.deps(files), req); err != nil {
+		t.Fatal(err)
+	}
+	pl := f.asmIn[1]
+	if pl.Subs != nil {
+		t.Errorf("pl: Subs = %+v, want nil (no narration in pl)", pl.Subs)
+	}
+	found := false
+	for _, l := range lines {
+		if l == "[pl] subtitles: no narration in this language, no subtitle track" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("log =\n%s\nwant the no-track note for pl", strings.Join(lines, "\n"))
+	}
+}
+
+// A write failure (here, a stale file already at the subs.ass path) fails
+// the render like any other temp-file problem, and the temp dir is still
+// removed (BR-004).
+func TestRender_subtitlesWriteFailureAbortsAndCleansUp(t *testing.T) { // FR-021
+	dir, files := workDir(withSubtitles(twoStepsEnPl))
+	files.write(filepath.Join(dir, ".screencaster", "tmp", "run1", "en", "subs.ass"), "stale")
+	f := &fakes{}
+
+	_, err := Render(context.Background(), f.deps(files), request(dir))
+	if err == nil || !strings.Contains(err.Error(), "write subtitles (en)") {
+		t.Fatalf("err = %v, want a write subtitles (en) error", err)
+	}
+	assertNoLeftovers(t, files, dir)
 }

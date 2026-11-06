@@ -1,0 +1,7 @@
+# Soft subtitle track, built-in style (ffmpeg's own SRT defaults).
+name: subtitles-on
+subtitles: true
+steps:
+  - goto: http://host.docker.internal:3000/projects
+    narration:
+      en: Welcome to the projects page.

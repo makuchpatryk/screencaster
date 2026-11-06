@@ -60,6 +60,7 @@ internal/
     voices/                resolve a voice per language over a catalog        BR-011, FR-018
     failure/               error types (no JSON tags)                         §9
     card/                  built-in start/end card page                       FR-009
+    subtitle/              ASS document + language tag                       FR-021
     executor/              step execution (two modes)                         FR-005, FR-006
     recorder/              one language: steps -> video + offsets             FR-004, FR-007
     shooter/               one screenshots run: steps -> PNGs                 FR-020
@@ -70,8 +71,8 @@ internal/
     setup/                 `screencaster setup`: check and install the native tools (pins.go, setup.go)  Decision 77
     wire/                  composition root: TTS factory, NewDeps, Setup, port -> adapter mapping
   adapters/                one external tool or protocol each
-    browser/               playwright-go: launch (sandboxed), context, screenshots, overlay.js, install-deps (install.go)  FR-004, FR-020
-    assembler/             ffmpeg: mix, cards, transcode, mux, tags           FR-009
+    browser/               playwright-go: launch (sandboxed), context, screenshots, overlay.js, install (install.go)  FR-004, FR-020
+    assembler/             ffmpeg: mix, cards, transcode, mux, tags, subs    FR-009, FR-021
     tts/                   Engine contract; piper/ (the only Piper code), wav/ (clip length)  FR-003
     sqlite/                jobs table, stored JSON, startup clean-up          FR-014, FR-015
     mcpserver/             MCP tools and prompt                               FR-012, 013, 017, 018, 019, 020
@@ -121,7 +122,8 @@ sequenceDiagram
         R->>B: screenshot built-in cards (one launch, only when one is set)
         R->>B: record(steps, clips)
         B-->>R: webm + stepOffsets
-        R->>A: assemble(webm, clips@offsets, intro, outro, meta): cut at the sync marker
+        Note over R: subtitles on: cues built from the recorder's own offsets, after Record (FR-021)
+        R->>A: assemble(webm, clips@offsets, intro, outro, subs, meta): cut at the sync marker
         A-->>R: tmp/<lang>.mp4
     end
     R->>FS: move all tmp mp4s -> <name>.<lang>.<ts>.mp4
@@ -166,6 +168,7 @@ t0 (end of the sync marker) ─────────────────�
 - The video is `[intro card] + recording + [outro card]`; a card is there only when the script sets it (Decision 81). The recorder knows nothing of the cards: its offsets are relative to the recording and the assembler adds the intro length. Every concat input is finite.
 - Output length is the video length (FR-009.4). Clips are placed `narrationLag` after their step, so after the last step the recorder waits until the last placed clip ends before it closes the video: the video always covers the audio; the assembler mixes clips without padding.
 - Drift target ±100 ms (FR-007), checked by the e2e test with the same bound, on the marker flash. The picture shows an action's effect 11–134 ms after the step starts, so `narrationLag` (70 ms, one value for every action, Decision 80) shifts the narration. With it, 5 local renders gave −13 to 80 ms (§17.1).
+- A subtitle cue's start and end reuse the exact clip offset and duration the `adelay` mix already placed (plus the intro's length, same as the mix's `lead`), so there is no second timing source to drift from the audio (FR-021).
 
 **Sync marker (Decision 69):** the video starts a variable time after page creation (bimodal, §17.1), so no constant aligns it. The recorded page therefore opens on a full-viewport magenta (`#FF00FF`) div over the start picture. The recorder holds it for `MarkerHold` (2 s, longer than the latest video start seen, 1.5 s), removes it, waits for two animation frames and takes t0. The assembler reads the first 4 s of the WebM as one averaged RGB pixel per frame, finds the first non-marker frame after a marker frame and cuts the recording there, so video time 0 is the recorder's t0. A recording without the marker fails with the `SyncMarker` failure; there is no fallback. The cut time is logged on every render (`sync marker ends at …`): a value near 2 s warns of a late video start. The marker costs about 2 s per language.
 
@@ -259,6 +262,7 @@ SQLite (`modernc.org/sqlite`), file `<work>/.screencaster/jobs.db`; schema in PR
 - WAL mode with a busy timeout. The worker is woken by a buffered channel on insert, no polling. Recovery runs first at start (FR-015).
 - **Script snapshot.** `render_video` and `take_screenshots` read the YAML once, validates those bytes and stores them in `jobs.script`; the worker renders the stored bytes, so editing the file while a job waits changes nothing. `ScriptPath` still anchors the demo folder. Only the YAML is snapshotted: card images are read again at run time. A `jobs.db` from before the column gets it on open (`ALTER TABLE`); its rows keep `NULL`, and a job with no snapshot fails with `job has no script snapshot` (none can be queued: recovery has already failed them). Once a job reaches a terminal status (`Finish`: succeeded/failed, or `Recover`'s interrupted-at-restart failure), `script` is set to `NULL`: the snapshot held raw YAML, which may include cookie values typed into the script, and the row itself stays (BR-007) — only that one column is blanked (Decision 85, security audit M4).
 - **Stored JSON.** `outputs_json` and `error_json` keep their field names; `adapters/sqlite` maps the untagged domain types (`renderer.Output`, `failure.Failure`) onto private records, and golden tests pin the bytes. `get_render_status` has its own output types in `adapters/mcpserver`, also pinned by a golden test.
+- **Subtitles column.** `jobs.subtitles` (`BOOLEAN`, PRD §13) stores the resolved on/off, the same precedent as `languages`: not the raw override. A `jobs.db` from before FR-021 gets the column on open (`ALTER TABLE ... DEFAULT 0`); its existing rows read `false`, correct since they predate the feature.
 
 ```mermaid
 stateDiagram-v2
@@ -336,7 +340,7 @@ Local single-user tool (PRD §14), so the model is minimal:
 
 ## 16. Architecture decisions
 
-Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64, 72–75 and 81 are also in the PRD log; 56, 57, 61, 65–71 and 76–80 are only here.
+Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64, 72–75, 81, 82–86 and 87 are also in the PRD log; 56, 57, 61, 65–71 and 76–80 are only here.
 
 | # | Decision | Why |
 |---|----------|-----|
@@ -383,6 +387,10 @@ Numbering continues the PRD Decisions Log (last: 43). 44–55, 58–60, 62–64,
 | 84 | Every path check against the working directory (Decision 58/62) additionally resolves the deepest existing component with `EvalSymlinks` before comparing prefixes, for the MCP script path, `outputDir`, card images and the screenshots folder; archive extraction (`setup`, tar and zip) resolves each entry's parent the same way before writing. A dangling symlink is refused; an in-tree symlink still works. Security audit M2/M3 | Refuse every symlink outright | Breaks real cases already in use: the Piper tarball's relative symlinks, and repos that link assets into the working directory. |
 | 85 | `.screencaster/` is created/secured `0700`, `jobs.db` (+`-wal`/`-shm`) `0600`; a chmod failure refuses to start rather than warn, with an error naming the exact `chown`. `jobs.script` is set to `NULL` once a job reaches a terminal status (`Finish` or `Recover`'s interrupted failure); the row stays (BR-007). Security audit M4 | Strip cookies before storing; warn instead of fail on a chmod failure | Stripping breaks a queued job surviving a restart (the snapshot is read again then); warning instead of failing leaves a secret-bearing file world- or group-readable with no further signal. |
 | 86 | Releases: `release.yml` refuses any ref but `refs/heads/main`, runs `go vet -tags e2e ./...` and `go test -race ./...` before building, and publishes `dist/SHA256SUMS` alongside the binaries and wrapper. Every `uses:` in `ci.yml`/`release.yml` is a 40-hex SHA with a `# vX.Y.Z` comment; every `FROM` of a public image in both Dockerfiles carries `@sha256:`; `runtime-base` ends `USER 65532:65532`. Security audit M5/M6/M7/M8 | Build provenance attestations; pin apt packages too | Attestations are a larger, separate effort (out of scope); apt packages (Chromium's system deps, ffmpeg) have no equivalent of Playwright's or Piper's fixed-URL pins to check against, so pinning them is tracked as known debt instead. |
+| 87 | Subtitles ship as one soft `mov_text` track per MP4, built from an ASS file (so ffmpeg's own SRT→mov_text converter carries the Default style's font, size, colour and background), not burned in; off unless the script sets `subtitles`, like `intro`/`outro` (decision 81) | Burn-in (`drawtext`/`subtitles` ffmpeg filters, needs libass or a bundled font); a sidecar `.srt`/`.ass` file; plain SRT with no style | Plays in any player that reads embedded tracks, with no new native or image dependency; matches issue #5's "ship as a soft track" option; a sidecar needs a second BR-006 naming concern and a player that reads it. |
+
+| 82 | Subtitles ship as one soft `mov_text` track per MP4, built from an ASS file (so ffmpeg's own SRT→mov_text converter carries the Default style's font, size, colour and background), not burned in; off unless the script sets `subtitles`, like `intro`/`outro` (decision 81) | Burn-in (`drawtext`/`subtitles` ffmpeg filters, needs libass or a bundled font); a sidecar `.srt`/`.ass` file; plain SRT with no style | Plays in any player that reads embedded tracks, with no new native or image dependency; matches issue #5's "ship as a soft track" option; a sidecar needs a second BR-006 naming concern and a player that reads it. |
+>>>>>>> e92bff6 (Add soft mov_text subtitle track (FR-021))
 
 ## 17. Open items for spikes
 

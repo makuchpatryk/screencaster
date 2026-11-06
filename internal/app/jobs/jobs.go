@@ -36,6 +36,10 @@ type NewJob struct {
 	Script     []byte
 	DemoName   string
 	Languages  []string
+	// Subtitles is the resolved on/off (FR-021), following the Languages
+	// precedent: the worker's re-render replays this value, not a raw
+	// override.
+	Subtitles bool
 }
 
 // Job is a stored job. Position is set only for queued jobs.
@@ -45,6 +49,7 @@ type Job struct {
 	Script     []byte // nil for a row stored before the snapshot column
 	DemoName   string
 	Languages  []string
+	Subtitles  bool
 	Status     Status
 	Position   int
 	CreatedAt  time.Time

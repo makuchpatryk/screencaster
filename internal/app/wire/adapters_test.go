@@ -69,6 +69,7 @@ func TestAssembleInput_everyFieldCrosses(t *testing.T) {
 		Clips:   []renderer.Clip{{Path: "/tmp/1.wav", Offset: 2 * time.Second}},
 		Intro:   &renderer.Still{Path: "/tmp/intro.png", Duration: 3 * time.Second},
 		Outro:   &renderer.Still{Path: "/tmp/outro.png", Duration: 4 * time.Second},
+		Subs:    &renderer.SubsTrack{Path: "/tmp/subs.ass", Lang: "eng"},
 		Title:   "Title",
 		Comment: "Comment",
 		Out:     "/tmp/out.mp4",
@@ -78,6 +79,7 @@ func TestAssembleInput_everyFieldCrosses(t *testing.T) {
 		Clips:   []assembler.Clip{{Path: "/tmp/1.wav", Offset: 2 * time.Second}},
 		Intro:   &assembler.Still{Path: "/tmp/intro.png", Duration: 3 * time.Second},
 		Outro:   &assembler.Still{Path: "/tmp/outro.png", Duration: 4 * time.Second},
+		Subs:    &assembler.Subs{Path: "/tmp/subs.ass", Lang: "eng"},
 		Title:   "Title",
 		Comment: "Comment",
 		Out:     "/tmp/out.mp4",
@@ -91,6 +93,12 @@ func TestAssembleInput_everyFieldCrosses(t *testing.T) {
 func TestAssembleInput_cardOffStaysNil(t *testing.T) { // decision 63
 	if got := assembleInput(renderer.AssembleRequest{}); got.Intro != nil || got.Outro != nil {
 		t.Errorf("stills = %+v, %+v, want nil", got.Intro, got.Outro)
+	}
+}
+
+func TestAssembleInput_noSubsStaysNil(t *testing.T) { // FR-021
+	if got := assembleInput(renderer.AssembleRequest{}); got.Subs != nil {
+		t.Errorf("Subs = %+v, want nil", got.Subs)
 	}
 }
 

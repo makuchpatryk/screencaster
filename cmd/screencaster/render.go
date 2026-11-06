@@ -49,15 +49,21 @@ func run(ctx context.Context, args []string, workDir string, render renderFunc, 
 
 func renderCmd(workDir string, render renderFunc, stdout, stderr io.Writer) *cobra.Command {
 	var langs []string
+	var subs bool
 	cmd := &cobra.Command{
 		Use:   "render <script>",
 		Short: "Render a script synchronously, without the job queue",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var subsOverride *bool
+			if cmd.Flags().Changed("subtitles") {
+				subsOverride = &subs
+			}
 			outs, err := render(cmd.Context(), renderer.Request{
 				WorkDir:      workDir,
 				ScriptPath:   args[0],
 				LangOverride: langs,
+				Subtitles:    subsOverride,
 				Progress: func(lang string, i, n int, action, target string) {
 					if target != "" {
 						target = " " + target
@@ -81,5 +87,7 @@ func renderCmd(workDir string, render renderFunc, stdout, stderr io.Writer) *cob
 		},
 	}
 	cmd.Flags().StringSliceVar(&langs, "lang", nil, "languages to render, overriding the script (e.g. en,pl)")
+	cmd.Flags().BoolVar(&subs, "subtitles", false, "override the script's subtitles on/off")
+	cmd.Flags().Lookup("subtitles").NoOptDefVal = "true" // bare --subtitles means true, like --lang's shape
 	return cmd
 }

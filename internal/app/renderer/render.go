@@ -15,6 +15,7 @@ import (
 	"screencaster/internal/domain/card"
 	"screencaster/internal/domain/failure"
 	"screencaster/internal/domain/script"
+	"screencaster/internal/domain/subtitle"
 	"screencaster/internal/domain/voices"
 )
 
@@ -69,13 +70,23 @@ type Still struct {
 	Duration time.Duration
 }
 
+// SubsTrack is the subtitle track for one language's assembly: an ASS file
+// at Path and the ISO 639-2/T tag the mov_text stream is stored under
+// (FR-021).
+type SubsTrack struct {
+	Path string
+	Lang string
+}
+
 // AssembleRequest is one language's assembly. Intro and Outro are nil for a
 // card that is off; clip offsets are relative to the recording. Title and
-// Comment become MP4 tags when not empty. Out must not exist yet.
+// Comment become MP4 tags when not empty. Subs is nil when there is no
+// subtitle track. Out must not exist yet.
 type AssembleRequest struct {
 	Video          string
 	Clips          []Clip
 	Intro, Outro   *Still
+	Subs           *SubsTrack
 	Title, Comment string
 	Out            string
 }
@@ -341,6 +352,24 @@ func renderLanguage(ctx context.Context, d Deps, plan Plan, lang, dir string, re
 	if m := plan.Script.Meta; m != nil {
 		asm.Title, asm.Comment = m.Title, m.Description
 	}
+	if plan.Subtitles != nil {
+		var lead time.Duration
+		if intro != nil {
+			lead = intro.Duration
+		}
+		cues := subtitleCues(steps, lang, clipPaths, durations, rec.Offsets, lead)
+		if len(cues) == 0 {
+			rep.logf("[%s] subtitles: no narration in this language, no subtitle track", lang)
+		} else {
+			tag := subtitle.Lang(lang)
+			path := filepath.Join(dir, "subs.ass")
+			if err := writeFile(d.Files, path, subtitle.ASS(cues, *plan.Subtitles)); err != nil {
+				return Output{}, fmt.Errorf("write subtitles (%s): %w", lang, err)
+			}
+			asm.Subs = &SubsTrack{Path: path, Lang: tag}
+			rep.logf("[%s] subtitles: %d cues (%s)", lang, len(cues), tag)
+		}
+	}
 	t = d.Now()
 	done, err := d.Asm.Assemble(ctx, asm)
 	if err != nil {
@@ -497,4 +526,43 @@ func buildCards(ctx context.Context, d Deps, plan Plan, lang, dir string, rep re
 	}
 	rep.logf("[%s] cards: %d built in %s", lang, len(shots), rep.since(t))
 	return intro, outro, nil
+}
+
+// subtitleCues builds one cue per narrated, un-hidden step that has a clip in
+// this language: Start and End reuse the exact offset and duration the
+// adelay mix already places the clip at (lead is the intro's Still.Duration,
+// or 0), so a cue can never drift from what is heard (FR-021, BR-003). A step
+// with no clip (un-narrated, or silent in lang) or `subtitles: false` gets no
+// cue.
+func subtitleCues(steps []script.Step, lang string, clipPaths map[int]string, durs map[int]time.Duration, offsets []time.Duration, lead time.Duration) []subtitle.Cue {
+	var cues []subtitle.Cue
+	for i, st := range steps {
+		if st.NoSubtitles {
+			continue
+		}
+		if _, ok := clipPaths[i]; !ok {
+			continue
+		}
+		d := durs[i]
+		if d <= 0 {
+			continue
+		}
+		start := lead + offsets[i]
+		cues = append(cues, subtitle.Cue{Start: start, End: start + d, Text: st.Narration[lang]})
+	}
+	return cues
+}
+
+// writeFile writes data to a new file at path, never an existing one
+// (BR-006).
+func writeFile(files Files, path string, data []byte) error {
+	w, err := files.CreateExcl(path)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		_ = w.Close()
+		return err
+	}
+	return w.Close()
 }

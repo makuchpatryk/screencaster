@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   script_path  TEXT NOT NULL,
   demo_name    TEXT NOT NULL,
   languages    TEXT NOT NULL,
+  subtitles    INTEGER NOT NULL DEFAULT 0,
   status       TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
   created_at   TEXT NOT NULL,
   started_at   TEXT,
@@ -47,7 +48,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);`
 
-const columns = `id, script_path, demo_name, languages, status, created_at, started_at, finished_at, outputs_json, error_json, script`
+const columns = `id, script_path, demo_name, languages, subtitles, status, created_at, started_at, finished_at, outputs_json, error_json, script`
 
 // Store is the job table. now is injected so tests control the timestamps.
 type Store struct {
@@ -94,6 +95,10 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	if err := addScriptColumn(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addSubtitlesColumn(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -147,6 +152,33 @@ func addScriptColumn(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN script TEXT`); err != nil {
 		return fmt.Errorf("add script column: %w", err)
+	}
+	return nil
+}
+
+// addSubtitlesColumn brings a jobs.db from before FR-021 up to date. Old rows
+// get the column's own default, false: they predate the feature, so that is
+// correct, not a guess.
+func addSubtitlesColumn(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('jobs')`)
+	if err != nil {
+		return fmt.Errorf("read jobs columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("read jobs columns: %w", err)
+		}
+		if name == "subtitles" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read jobs columns: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN subtitles INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add subtitles column: %w", err)
 	}
 	return nil
 }
@@ -209,8 +241,8 @@ func (s *Store) Insert(ctx context.Context, j jobs.NewJob) (int, error) {
 		return 0, err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO jobs (id, script_path, demo_name, languages, status, created_at, script) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		j.ID, j.ScriptPath, j.DemoName, string(langs), jobs.Queued, s.stamp(), string(j.Script))
+		`INSERT INTO jobs (id, script_path, demo_name, languages, subtitles, status, created_at, script) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.ID, j.ScriptPath, j.DemoName, string(langs), j.Subtitles, jobs.Queued, s.stamp(), string(j.Script))
 	if err != nil {
 		return 0, fmt.Errorf("insert job: %w", err)
 	}
@@ -313,7 +345,7 @@ func scan(r rowScanner) (jobs.Job, error) {
 		started, finished, out, err sql.NullString
 		script                      sql.NullString
 	)
-	if e := r.Scan(&j.ID, &j.ScriptPath, &j.DemoName, &langs, &j.Status, &created, &started, &finished, &out, &err, &script); e != nil {
+	if e := r.Scan(&j.ID, &j.ScriptPath, &j.DemoName, &langs, &j.Subtitles, &j.Status, &created, &started, &finished, &out, &err, &script); e != nil {
 		return jobs.Job{}, e
 	}
 	if script.Valid {

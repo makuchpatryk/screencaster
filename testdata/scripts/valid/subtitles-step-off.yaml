@@ -1,0 +1,11 @@
+# A step can hide its own subtitle cue; its narration is still spoken.
+name: subtitles-step-off
+subtitles: true
+steps:
+  - goto: http://host.docker.internal:3000/projects
+    narration:
+      en: Welcome to the projects page.
+  - click: "#new-project"
+    subtitles: false
+    narration:
+      en: Click New project.

@@ -47,6 +47,7 @@ type Script struct {
 	Meta         *Meta             `json:"meta"`
 	Intro        *Bookend          `json:"intro"`
 	Outro        *Bookend          `json:"outro"`
+	Subtitles    *Subtitles        `json:"subtitles"`
 	Steps        []Step            `json:"steps"`
 }
 
@@ -92,6 +93,35 @@ func (b *Bookend) UnmarshalJSON(data []byte) error {
 	}
 	type plain Bookend // no methods, so no recursion
 	return json.Unmarshal(data, (*plain)(b))
+}
+
+// Subtitles is the script's soft subtitle track (FR-021). A nil *Subtitles in
+// Script means the key was not mentioned, which means no track. Off is an
+// explicit `false`; `true` and `{}` decode to the zero Subtitles, the track
+// with every style field left at ffmpeg's own default (subtitle.Style zero
+// value). Font, Size, Color and Background mirror subtitle.Style; the schema
+// checks their shape before this type ever sees them.
+type Subtitles struct {
+	Off        bool   `json:"-"`
+	Font       string `json:"font"`
+	Size       int    `json:"size"`
+	Color      string `json:"color"`
+	Background string `json:"background"`
+}
+
+// UnmarshalJSON maps the schema's `false` to Off and `true` to the zero
+// Subtitles, the same pattern as Bookend.UnmarshalJSON.
+func (s *Subtitles) UnmarshalJSON(data []byte) error {
+	switch string(bytes.TrimSpace(data)) {
+	case "false":
+		*s = Subtitles{Off: true}
+		return nil
+	case "true":
+		*s = Subtitles{} // every style field at ffmpeg's own default, like {}
+		return nil
+	}
+	type plain Subtitles // no methods, so no recursion
+	return json.Unmarshal(data, (*plain)(s))
 }
 
 // StorageState is the session the browser starts with, in the shape of
@@ -253,6 +283,7 @@ func checkType(s Script) failure.ValidationErrors {
 		{"voices", s.Voices != nil},
 		{"intro", s.Intro != nil},
 		{"outro", s.Outro != nil},
+		{"subtitles", s.Subtitles != nil},
 	} {
 		if f.set {
 			add("/"+f.name, f.name+" is not allowed in a screenshots script")
@@ -261,6 +292,9 @@ func checkType(s Script) failure.ValidationErrors {
 	for i, st := range s.Steps {
 		if st.Narration != nil {
 			add(fmt.Sprintf("/steps/%d/narration", i), "narration is not allowed in a screenshots script")
+		}
+		if st.NoSubtitles {
+			add(fmt.Sprintf("/steps/%d/subtitles", i), "subtitles is not allowed in a screenshots script")
 		}
 	}
 	if !slices.ContainsFunc(s.Steps, isShot) {

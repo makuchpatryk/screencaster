@@ -45,6 +45,47 @@ func TestRun_langFlagOverridesScript(t *testing.T) { // FR-011, BR-002
 	}
 }
 
+func TestRun_subtitlesFlag(t *testing.T) { // FR-011, FR-021
+	tests := []struct {
+		name string
+		args []string
+		want *bool
+	}{
+		{"absent: no override", []string{"render", "demos/a.yaml"}, nil},
+		{"bare flag: true", []string{"render", "demos/a.yaml", "--subtitles"}, boolPtr(true)},
+		{"=false: false", []string{"render", "demos/a.yaml", "--subtitles=false"}, boolPtr(false)},
+		{"=true: true", []string{"render", "demos/a.yaml", "--subtitles=true"}, boolPtr(true)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got renderer.Request
+			fake := func(_ context.Context, req renderer.Request) ([]renderer.Output, error) {
+				got = req
+				return nil, nil
+			}
+			if code := run(context.Background(), tt.args, "/work", fake, setupConfig{}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+				t.Fatalf("exit %d", code)
+			}
+			if !reflect.DeepEqual(got.Subtitles, tt.want) {
+				t.Errorf("Subtitles = %v, want %v", derefBool(got.Subtitles), derefBool(tt.want))
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// derefBool prints a *bool for test failure messages without a nil deref.
+func derefBool(b *bool) string {
+	if b == nil {
+		return "nil"
+	}
+	if *b {
+		return "&true"
+	}
+	return "&false"
+}
+
 func TestRun_versionFlagPrintsBuildVersion(t *testing.T) { // release distribution
 	old := version
 	t.Cleanup(func() { version = old })
